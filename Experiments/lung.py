@@ -49,7 +49,7 @@ class ParameterNode(object):
     # grav and roi are in LPS
     def getGravityVector(self):
         #return [0,0,-10000]
-        return [0,10000 * 5,0]
+        return [0,10000 * 3,0]
     def getBoundaryROI(self):
         #[ 0, -220, 0, 30, -170, -300],
         #return [0, 0, 0, 0, 0, 0]
@@ -60,10 +60,11 @@ parameterNode = ParameterNode()
 
 # Load the mesh
 modelNode = slicer.util.loadNodeFromFile(parameterNode.modelNodeFileName)
+grid = modelNode.GetUnstructuredGrid()
 
 # mark the back 25% of the surface nodes as fixed
 surfaceFilter = vtk.vtkDataSetSurfaceFilter()
-surfaceFilter.SetInputData(modelNode.GetUnstructuredGrid())
+surfaceFilter.SetInputData(grid)
 surfaceFilter.SetPassThroughPointIds(True)
 surfaceFilter.Update()
 surfaceMesh = surfaceFilter.GetOutputDataObject(0)
@@ -74,6 +75,18 @@ surfacePoints = vtk.util.numpy_support.vtk_to_numpy(surfaceMesh.GetPoints().GetD
 paSurfacePoints = surfacePoints.transpose()[1]
 divisionPlane = paSurfacePoints.min() + 0.25 * (paSurfacePoints.max() - paSurfacePoints.min())
 backOfLung = (paSurfacePoints < divisionPlane)
+
+# calculate the per-element young's moduli
+
+pointsArray = numpy.array(grid.GetPoints().GetData())
+cellsArray = numpy.array(grid.GetCells().GetData())
+tetrahedraArray = cellsArray.reshape(-1,5)[:,1:5]
+centroidsArray = numpy.mean(pointsArray[tetrahedraArray], axis=1)
+youngModulusBase = 1.5
+youngModulusArray = numpy.ones(centroidsArray.shape[0]) * youngModulusBase
+elementsOnRight = numpy.where(centroidsArray[:,0] > 0)[0]
+youngModulusArray[elementsOnRight] += 3
+
 
 # create a stress array
 
@@ -126,7 +139,7 @@ meshNode.addObject('MeshVTKLoader', name="loader", filename=parameterNode.modelN
 meshNode.addObject('TetrahedronSetTopologyContainer', name="Container", src="@loader")
 meshNode.addObject('TetrahedronSetTopologyModifier', name="Modifier")
 meshNode.addObject('MechanicalObject', name="mstate", template="Vec3f")
-meshNode.addObject('TetrahedronFEMForceField', name="FEM", youngModulus=1.5, poissonRatio=0.45, method="large", computeVonMisesStress=vonMisesMode['fullGreen'])
+meshNode.addObject('TetrahedronFEMForceField', name="FEM", youngModulus=youngModulusArray, poissonRatio=0.45, method="large", computeVonMisesStress=vonMisesMode['fullGreen'])
 meshNode.addObject('MeshMatrixMass', totalMass=1)
 
 fixedSurface = meshNode.addChild('FixedSurface')
