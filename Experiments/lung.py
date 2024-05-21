@@ -1,20 +1,20 @@
 """
+export DIR=/media/volume/sdb
+SOFA_ROOT=${DIR}/Slicer-SOFA-build/SOFA-build \
+        ${DIR}/Slicer-superbuild/Slicer-build/Slicer \
+        --launcher-additional-settings ${DIR}/Slicer-SOFA-build/inner-build/AdditionalLauncherSettings.ini \
+        --additional-module-path ${DIR}/SlicerOpenIGTLink-build/inner-build/lib/Slicer-5.7/qt-loadable-modules \
+        --additional-module-path ${DIR}/SlicerOpenIGTLink-build/inner-build/lib/Slicer-5.7/qt-scripted-modules
 
-SOFA_ROOT=/media/volume/sdb/Slicer-SOFA-build/SOFA-build \
-        /media/volume/sdb/Slicer-superbuild/Slicer-build/Slicer \
-        --launcher-additional-settings /media/volume/sdb/Slicer-SOFA-build/inner-build/AdditionalLauncherSettings.ini
-        --additional-module-path /media/volume/sdb/SlicerOpenIGTLink-build/inner-build/lib/Slicer-5.7/qt-loadable-modules \
-        --additional-module-path /media/volume/sdb/SlicerOpenIGTLink-build/inner-build/lib/Slicer-5.7/qt-scripted-modules
+SOFA_ROOT=${DIR}/Slicer-SOFA-build/SOFA-build \
+        ${DIR}/Slicer-superbuild/Slicer-build/Slicer \
+        --launcher-additional-settings ${DIR}/Slicer-SOFA-build/inner-build/AdditionalLauncherSettings.ini \
+        --launcher-additional-settings ${DIR}/SlicerOpenIGTLink-build/inner-build/AdditionalLauncherSettings.ini
 
-SOFA_ROOT=/media/volume/sdb/Slicer-SOFA-build/SOFA-build \
-        /media/volume/sdb/Slicer-superbuild/Slicer-build/Slicer \
-        --launcher-additional-settings /media/volume/sdb/Slicer-SOFA-build/inner-build/AdditionalLauncherSettings.ini \
-        --launcher-additional-settings /media/volume/sdb/SlicerOpenIGTLink-build/inner-build/AdditionalLauncherSettings.ini
-
-SOFA_ROOT=/media/volume/sdb/Slicer-SOFA-build/SOFA-build \
-        /media/volume/sdb/Slicer-superbuild/Slicer-build/Slicer \
+SOFA_ROOT=${DIR}/Slicer-SOFA-build/SOFA-build \
+        ${DIR}/Slicer-superbuild/Slicer-build/Slicer \
         --launcher-additional-settings \
-            /media/volume/sdb/Slicer-SOFA-build/inner-build/AdditionalLauncherSettings.ini \
+            ${DIR}/Slicer-SOFA-build/inner-build/AdditionalLauncherSettings.ini \
         --launch PythonSlicer
 
 """
@@ -42,7 +42,10 @@ vonMisesMode = {
 
 class ParameterNode(object):
     dt=0.01
-    modelNodeFileName="/home/exouser/right-lung-mesh-low.vtk"
+    #modelNodeFileName="/home/exouser/right-lung-mesh-low.vtk"
+    #modelNodeFileName="/home/exouser/Documents/head-top-2seg.vtk"
+    #modelNodeFileName="/home/exouser/Documents/sphere-2seg.vtk"
+    modelNodeFileName="/home/exouser/Documents/sphere.vtk"
     # grav and roi are in LPS
     def getGravityVector(self):
         #return [0,0,-10000]
@@ -127,7 +130,7 @@ meshNode.addObject('TetrahedronFEMForceField', name="FEM", youngModulus=1.5, poi
 meshNode.addObject('MeshMatrixMass', totalMass=1)
 
 fixedSurface = meshNode.addChild('FixedSurface')
-fixedSurface.addObject('FixedConstraint', indices=numpy.where(backOfLung))
+fixedSurface.addObject('FixedConstraint', indices=surfacePointIDs[numpy.where(backOfLung)])
 
 
 Sofa.Simulation.init(rootNode)
