@@ -281,6 +281,7 @@ def updateSimulation():
     # update grid transform from displacements
     displacementArray = slicer.util.arrayFromModelPointData(modelNode, "Displacement")
     displacementArray[:] = (mechanicalState.position - mechanicalState.rest_position) 
+    displacementArray *= numpy.array([-1, -1, 1])
     slicer.util.arrayFromModelPointsModified(modelNode)
     probeFilter.Update()
     probeImage = probeFilter.GetOutputDataObject(0)
