@@ -46,6 +46,7 @@ class ParameterNode(object):
     #modelNodeFileName="/home/exouser/Documents/head-top-2seg.vtk"
     #modelNodeFileName="/home/exouser/Documents/sphere-2seg.vtk"
     modelNodeFileName="/home/exouser/Documents/sphere.vtk"
+    modelNodeFileName = "/opt/data/SlicerLung/EservalRocha/Model case/meshes/mesh.vtk"
     # grav and roi are in LPS
     def getGravityVector(self):
         #return [0,0,-10000]
@@ -90,9 +91,9 @@ youngModulusArray[elementsOnRight] += 3
 
 # create a stress array
 
-labelsArray = slicer.util.arrayFromModelCellData(modelNode, "labels")
+numberOfCells = modelNode.GetUnstructuredGrid().GetNumberOfCells()
 stressVTKArray = vtk.vtkFloatArray()
-stressVTKArray.SetNumberOfValues(labelsArray.shape[0])
+stressVTKArray.SetNumberOfValues(numberOfCells)
 stressVTKArray.SetName("VonMisesStress")
 modelNode.GetUnstructuredGrid().GetCellData().AddArray(stressVTKArray)
 
