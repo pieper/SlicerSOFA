@@ -190,6 +190,8 @@ displacementGrid = displacementGridNode.GetTransformFromParent().GetDisplacement
 displacementGrid.SetOrigin(probeImage.GetOrigin())
 displacementGrid.SetSpacing(probeImage.GetSpacing())
 
+# TODO: see if there's a way to regularize the transform to avoid needing to turn off convergence warnings
+displacementGridNode.SetGlobalWarningDisplay(0)
 
 #
 # do the sofa part
@@ -263,9 +265,11 @@ MainHeader(rootSofaNode, plugins=[
     "SofaIGTLink"
 ], dt=dt, gravity=gravityVector)
 
+todo_this_seems_slower_than_the_default = """
 rootSofaNode.addObject('FreeMotionAnimationLoop',
                    parallelODESolving=True,
                    parallelCollisionDetectionAndFreeMotion=True)
+"""
 
 meshSofaNode = rootSofaNode.addChild('Mesh')
 meshSofaNode.addObject('EulerImplicitSolver', firstOrder=False, rayleighMass=0.1, rayleighStiffness=0.1)
