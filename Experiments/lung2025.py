@@ -2,11 +2,11 @@ import math
 import numpy
 import vtk.util.numpy_support
 
-#targetMeshNodesPerMM = 0.1
-targetMeshNodesPerMM = 0.075
-#targetMeshNodesPerMM = 0.15
-#targetMeshNodesPerMM = 0.3
-targetMaxEdgeMM = 1.1 * (1. / targetMeshNodesPerMM)
+targetNodeSize = 15
+meshPadding = 2 * targetNodeSize
+targetMaxEdge = 1.1 * targetNodeSize
+
+probeDimension = 10
 
 ctTransparentValue = -2048 # well below CT air
 ctThresholdValue = -2047
@@ -15,7 +15,7 @@ ctWindow = 1400
 ctLevel = -500
 
 attachmentRAS = numpy.array([38.49312772285862, 159.75102715306605, -225.53033447265625])
-attachmentRadiusMM = 42
+attachmentRadius = 42
 
 # set up input data
 print("loading...")
@@ -71,24 +71,8 @@ if not cavityGradientNode:
     cavityGradientNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLVectorVolumeNode")
     cavityGradientNode.SetName("cavityGradient")
 
-# create mesh points
-print("meshing...")
-
-segBounds = numpy.ndarray(6)
-segNode.GetRASBounds(segBounds)
-axes = []
-for start,end in segBounds.reshape(-1,2):
-    nodeCount = math.ceil((end-start) * targetMeshNodesPerMM)
-    axes.append(numpy.linspace(start, end, nodeCount))
-gridPoints = numpy.transpose(numpy.meshgrid(*axes))
-inputPoints = gridPoints.ravel().reshape(-1,3)
-homogeneousCoordinates = numpy.ones((inputPoints.shape[0], 1))
-inputPoints = numpy.hstack((inputPoints, homogeneousCoordinates))
-
-# run Delaunay on points that are in segmentation
-
-pointSet = vtk.vtkPointSet()
-points = vtk.vtkPoints()
+# Create the lung cavity
+print("creating cavity...")
 
 segNode.SetReferenceImageGeometryParameterFromVolumeNode(ctNode)
 forceToSingleLayer = True
@@ -96,64 +80,6 @@ segNode.GetSegmentation().CollapseBinaryLabelmaps(forceToSingleLayer)
 
 slicer.modules.segmentations.logic().ExportVisibleSegmentsToLabelmapNode(segNode, labelNode, ctNode)
 labelArray = slicer.util.arrayFromVolume(labelNode)
-
-rasToIJK = vtk.vtkMatrix4x4()
-labelNode.GetRASToIJKMatrix(rasToIJK)
-
-def rasPointToIndex(rasToIJK, rasPoint):
-    pointCoordinate = numpy.floor(rasToIJK.MultiplyPoint(rasPoint))
-    return tuple(reversed(numpy.array(pointCoordinate[:3], dtype="uint32")))
-
-for p in inputPoints:
-    pointIndex = rasPointToIndex(rasToIJK, p)
-    if labelArray[pointIndex]:
-        points.InsertNextPoint(*p[:3])
-
-pointSet.SetPoints(points)
-
-delaunay = vtk.vtkDelaunay3D()
-delaunay.SetInputData(pointSet)
-delaunay.Update()
-meshGrid = delaunay.GetOutputDataObject(0)
-
-meshNode.SetAndObserveMesh(meshGrid)
-
-# Remove elements with centroids outside segmentation or are larger than we want
-
-pointsArray = numpy.array(meshGrid.GetPoints().GetData())
-cellsArray = numpy.array(meshGrid.GetCells().GetData())
-tetrahedraArray = cellsArray.reshape(-1,5)[:,1:5]
-centroidsArray = numpy.mean(pointsArray[tetrahedraArray], axis=1)
-homogeneousCoordinates = numpy.ones((centroidsArray.shape[0], 1))
-centroidsArray = numpy.hstack((centroidsArray, homogeneousCoordinates))
-
-tetrahedraToKeep = vtk.vtkIdList()
-for tetraID,centroid in enumerate(centroidsArray):
-    centroidIndex = rasPointToIndex(rasToIJK, centroid)
-    tetra = meshGrid.GetCell(tetraID)
-    bounds = numpy.array(tetra.GetBounds())
-    mins = bounds[::2]
-    maxes = bounds[1::2]
-    maxSize = (maxes-mins).max()
-    #if labelArray[centroidIndex] and maxSize < targetMaxEdgeMM:
-    if maxSize < targetMaxEdgeMM:
-        tetrahedraToKeep.InsertNextId(tetraID)
-
-extractCells = vtk.vtkExtractCells()
-extractCells.SetInputData(meshGrid)
-extractCells.SetCellList(tetrahedraToKeep)
-extractCells.Update()
-
-extractedMeshGrid = extractCells.GetOutputDataObject(0)
-meshNode.SetAndObserveMesh(extractedMeshGrid)
-
-originalMeshGrid = vtk.vtkUnstructuredGrid()
-originalMeshGrid.DeepCopy(extractedMeshGrid)
-originalMeshNode.SetAndObserveMesh(originalMeshGrid)
-originalMeshNode.GetDisplayNode().SetRepresentation(slicer.vtkMRMLDisplayNode.WireframeRepresentation)
-
-# Create the lung cavity
-print("creating cavity...")
 
 cavityLabelImage = cavityLabelNode.GetImageData()
 if not cavityLabelImage:
@@ -210,6 +136,91 @@ if not cavityDistanceNode.GetImageData() or not cavityGradientNode.GetImageData(
     cavityLabelNode.SetIJKToRASMatrix(ctIJKToRAS)
     cavityDistanceNode.SetIJKToRASMatrix(ctIJKToRAS)
     cavityGradientNode.SetIJKToRASMatrix(ctIJKToRAS)
+cavityDistanceArray = slicer.util.arrayFromVolume(cavityDistanceNode)
+cavityGradientArray = slicer.util.arrayFromVolume(cavityGradientNode)
+
+# create mesh points
+print("meshing...")
+
+segBounds = numpy.ndarray(6)
+segNode.GetRASBounds(segBounds)
+axes = []
+for start,end in segBounds.reshape(-1,2):
+    start -= meshPadding
+    end += meshPadding
+    nodeCount = math.ceil((end-start) / targetNodeSize)
+    axes.append(numpy.linspace(start, end, nodeCount))
+gridPoints = numpy.transpose(numpy.meshgrid(*axes))
+inputPoints = gridPoints.ravel().reshape(-1,3)
+homogeneousCoordinates = numpy.ones((inputPoints.shape[0], 1))
+inputPoints = numpy.hstack((inputPoints, homogeneousCoordinates))
+
+# run Delaunay on points that are in segmentation
+
+pointSet = vtk.vtkPointSet()
+points = vtk.vtkPoints()
+
+rasToIJK = vtk.vtkMatrix4x4()
+labelNode.GetRASToIJKMatrix(rasToIJK)
+
+def rasPointToIndex(rasToIJK, rasPoint):
+    pointCoordinate = numpy.floor(rasToIJK.MultiplyPoint(rasPoint))
+    return tuple(reversed(numpy.array(pointCoordinate[:3], dtype="uint32")))
+
+for p in inputPoints:
+    pointIndex = rasPointToIndex(rasToIJK, p)
+    # if labelArray[pointIndex]: TESTING
+    if cavityDistanceArray[pointIndex] < meshPadding:
+        points.InsertNextPoint(*p[:3])
+    """
+    else:
+        points.InsertNextPoint(*p[:3])
+    """
+
+pointSet.SetPoints(points)
+
+delaunay = vtk.vtkDelaunay3D()
+delaunay.SetInputData(pointSet)
+delaunay.Update()
+meshGrid = delaunay.GetOutputDataObject(0)
+
+meshNode.SetAndObserveMesh(meshGrid)
+
+# Remove elements with centroids outside segmentation or are larger than we want
+
+pointsArray = numpy.array(meshGrid.GetPoints().GetData())
+cellsArray = numpy.array(meshGrid.GetCells().GetData())
+tetrahedraArray = cellsArray.reshape(-1,5)[:,1:5]
+centroidsArray = numpy.mean(pointsArray[tetrahedraArray], axis=1)
+homogeneousCoordinates = numpy.ones((centroidsArray.shape[0], 1))
+centroidsArray = numpy.hstack((centroidsArray, homogeneousCoordinates))
+
+tetrahedraToKeep = vtk.vtkIdList()
+for tetraID,centroid in enumerate(centroidsArray):
+    centroidIndex = rasPointToIndex(rasToIJK, centroid)
+    tetra = meshGrid.GetCell(tetraID)
+    bounds = numpy.array(tetra.GetBounds())
+    mins = bounds[::2]
+    maxes = bounds[1::2]
+    maxSize = (maxes-mins).max()
+    #if labelArray[centroidIndex] and maxSize < targetMaxEdge: TESTING
+    if maxSize < targetMaxEdge:
+        tetrahedraToKeep.InsertNextId(tetraID)
+
+extractCells = vtk.vtkExtractCells()
+extractCells.SetInputData(meshGrid)
+extractCells.SetCellList(tetrahedraToKeep)
+extractCells.Update()
+
+extractedMeshGrid = extractCells.GetOutputDataObject(0)
+meshNode.SetAndObserveMesh(extractedMeshGrid)
+meshNode.GetDisplayNode().SetEdgeVisibility(True)
+
+originalMeshGrid = vtk.vtkUnstructuredGrid()
+originalMeshGrid.DeepCopy(extractedMeshGrid)
+originalMeshNode.SetAndObserveMesh(originalMeshGrid)
+originalMeshNode.GetDisplayNode().SetRepresentation(slicer.vtkMRMLDisplayNode.WireframeRepresentation)
+
 
 # create displacement array
 print("Configuring variables...")
@@ -231,7 +242,7 @@ meshNode.GetMesh().GetCellData().AddArray(stressVTKArray)
 # get pointIDs in attachment sphere
 
 extractedPointsArray = numpy.array(extractedMeshGrid.GetPoints().GetData())
-attachedPoints = numpy.linalg.norm(pointsArray - attachmentRAS, axis=1) < attachmentRadiusMM
+attachedPoints = numpy.linalg.norm(pointsArray - attachmentRAS, axis=1) < attachmentRadius
 cellsArray = numpy.array(extractedMeshGrid.GetCells().GetData())
 extractedTetrahedraArray = cellsArray.reshape(-1,5)[:,1:5]
 
@@ -266,14 +277,16 @@ def addGridTransformFromArray(narray, name="Grid Transform"):
 
 
 probeGrid = vtk.vtkImageData()
-probeDimension = 10
 probeGrid.SetDimensions(probeDimension, probeDimension, probeDimension)
 probeGrid.AllocateScalars(vtk.VTK_DOUBLE, 1)
-meshBounds = [0]*6
+meshBounds = numpy.ndarray(6)
 meshNode.GetRASBounds(meshBounds)
-probeGrid.SetOrigin(meshBounds[0], meshBounds[2], meshBounds[4])
-probeSize = (meshBounds[1] - meshBounds[0], meshBounds[3] - meshBounds[2], meshBounds[5] - meshBounds[4])
-probeGrid.SetSpacing(probeSize[0]/probeDimension, probeSize[1]/probeDimension, probeSize[2]/probeDimension)
+meshMins = meshBounds[::2]
+meshMaxes = meshBounds[1::2]
+probeSize = meshMaxes - meshMins
+probeGrid.SetOrigin(*meshMins)
+#probeGrid.SetSpacing(probeSize[0]/probeDimension, probeSize[1]/probeDimension, probeSize[2]/probeDimension)
+probeGrid.SetSpacing(*(probeSize/probeDimension))
 
 probeFilter = vtk.vtkProbeFilter()
 probeFilter.SetInputData(probeGrid)
@@ -448,4 +461,4 @@ def updateSimulation():
     else:
         print("Simlation stopped")
 
-#updateSimulation()
+updateSimulation()
