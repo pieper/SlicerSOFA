@@ -35,6 +35,16 @@ if not labelNode:
     labelNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode")
     labelNode.SetName("label")
 
+cavityLabelNode = slicer.mrmlScene.GetFirstNodeByName("cavityLabel")
+if not cavityLabelNode:
+    cavityLabelNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode")
+    cavityLabelNode.SetName("cavityLabel")
+
+cavityGradientNode = slicer.mrmlScene.GetFirstNodeByName("cavityGradient")
+if not cavityGradientNode:
+    cavityGradientNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLVectorVolumeNode")
+    cavityGradientNode.SetName("cavityGradient")
+
 # create mesh points
 
 segBounds = numpy.ndarray(6)
@@ -81,7 +91,7 @@ meshGrid = delaunay.GetOutputDataObject(0)
 
 meshNode.SetAndObserveMesh(meshGrid)
 
-# Remove elements with centroids outside segmentation
+# Remove elements with centroids outside segmentation or are larger than we want
 
 pointsArray = numpy.array(meshGrid.GetPoints().GetData())
 cellsArray = numpy.array(meshGrid.GetCells().GetData())
@@ -108,6 +118,33 @@ extractCells.Update()
 
 extractedMeshGrid = extractCells.GetOutputDataObject(0)
 meshNode.SetAndObserveMesh(extractedMeshGrid)
+
+# Create the lung cavity
+
+cavityImage = vtk.vtkImageData()
+cavityImage.DeepCopy(labelNode.GetImageData())
+cavityLabelNode.SetAndObserveImageData(cavityImage)
+cavityArray = slicer.util.arrayFromVolume(cavityLabelNode)
+cavityArray[labelArray != 0] = 0 # clear all lung material
+cavityArray[labelArray == 0] = 1 # set all non-lung material
+slicer.util.arrayFromVolumeModified(cavityLabelNode)
+
+# make the cavity vector field (gradient)
+
+ijkToRAS = vtk.vtkMatrix4x4()
+labelNode.GetIJKToRASMatrix(ijkToRAS)
+cavityCast = vtk.vtkImageCast() # TODO: make 1mm isotropic with identity ijkToRAS
+cavityCast.SetOutputScalarTypeToFloat()
+cavityCast.SetInputData(cavityImage)
+cavityDistance = vtk.vtkImageEuclideanDistance() # TODO sqrt?
+cavityDistance.SetInputConnection(cavityCast.GetOutputPort())
+cavityGradient = vtk.vtkImageGradient()
+cavityGradient.SetDimensionality(3)
+cavityGradient.SetInputConnection(cavityDistance.GetOutputPort())
+cavityGradient.Update()
+cavityGradientNode.SetAndObserveImageData(cavityGradient.GetOutputDataObject(0))
+cavityLabelNode.SetIJKToRASMatrix(ijkToRAS)
+cavityGradientNode.SetIJKToRASMatrix(ijkToRAS)
 
 # create displacement array
 
@@ -288,8 +325,8 @@ meshSofaNode.addObject('TetrahedronFEMForceField', name="FEM",
                        computeVonMisesStress=vonMisesMode['fullGreen'])
 meshSofaNode.addObject('MeshMatrixMass', totalMass=1)
 
-fixedSurface = meshSofaNode.addChild('FixedSurface')
-fixedSurface.addObject('FixedConstraint', indices=numpy.where(attachedPoints))
+vesselAttachments = meshSofaNode.addChild('VesselAttachments')
+vesselAttachments.addObject('FixedConstraint', indices=numpy.where(attachedPoints))
 
 Sofa.Simulation.init(rootSofaNode)
 Sofa.Simulation.reset(rootSofaNode)
