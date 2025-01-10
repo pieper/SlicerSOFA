@@ -40,6 +40,11 @@ if not cavityLabelNode:
     cavityLabelNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode")
     cavityLabelNode.SetName("cavityLabel")
 
+cavityDistanceNode = slicer.mrmlScene.GetFirstNodeByName("cavityDistance")
+if not cavityDistanceNode:
+    cavityDistanceNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode")
+    cavityDistanceNode.SetName("cavityDistance")
+
 cavityGradientNode = slicer.mrmlScene.GetFirstNodeByName("cavityGradient")
 if not cavityGradientNode:
     cavityGradientNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLVectorVolumeNode")
@@ -138,12 +143,17 @@ cavityCast.SetOutputScalarTypeToFloat()
 cavityCast.SetInputData(cavityImage)
 cavityDistance = vtk.vtkImageEuclideanDistance() # TODO sqrt?
 cavityDistance.SetInputConnection(cavityCast.GetOutputPort())
+cavityMath = vtk.vtkImageMathematics()
+cavityMath.SetOperationToSquareRoot()
+cavityMath.SetInputConnection(cavityDistance.GetOutputPort())
 cavityGradient = vtk.vtkImageGradient()
 cavityGradient.SetDimensionality(3)
-cavityGradient.SetInputConnection(cavityDistance.GetOutputPort())
+cavityGradient.SetInputConnection(cavityMath.GetOutputPort())
 cavityGradient.Update()
+cavityDistanceNode.SetAndObserveImageData(cavityMath.GetOutputDataObject(0))
 cavityGradientNode.SetAndObserveImageData(cavityGradient.GetOutputDataObject(0))
 cavityLabelNode.SetIJKToRASMatrix(ijkToRAS)
+cavityDistanceNode.SetIJKToRASMatrix(ijkToRAS)
 cavityGradientNode.SetIJKToRASMatrix(ijkToRAS)
 
 # create displacement array
