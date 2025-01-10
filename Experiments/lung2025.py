@@ -8,10 +8,17 @@ targetMeshNodesPerMM = 0.075
 #targetMeshNodesPerMM = 0.3
 targetMaxEdgeMM = 1.1 * (1. / targetMeshNodesPerMM)
 
+ctTransparentValue = -2048 # well below CT air
+ctThresholdValue = -2047
+ctAirValue = -1000
+ctWindow = 1400
+ctLevel = -500
+
 attachmentRAS = numpy.array([38.49312772285862, 159.75102715306605, -225.53033447265625])
 attachmentRadiusMM = 42
 
 # set up input data
+print("loading...")
 
 ctFilePath = "/opt/data/SlicerLung/EservalRocha/Model case/6 VOL MEDIASTINO.nrrd"
 segFilePath = "/opt/data/SlicerLung/EservalRocha/Model case/RightLung.seg.nrrd"
@@ -19,6 +26,14 @@ segFilePath = "/opt/data/SlicerLung/EservalRocha/Model case/RightLung.seg.nrrd"
 ctNode = slicer.mrmlScene.GetFirstNodeByName("ct")
 if not ctNode:
     ctNode = slicer.util.loadVolume(ctFilePath, properties = {"name": "ct"})
+    ctLungNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode")
+    ctLungNode.SetName("ctLung")
+    ctCavityNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode")
+    ctCavityNode.SetName("ctCavity")
+ctIJKToRAS = vtk.vtkMatrix4x4()
+ctNode.GetIJKToRASMatrix(ctIJKToRAS)
+ctLungNode.SetIJKToRASMatrix(ctIJKToRAS)
+ctCavityNode.SetIJKToRASMatrix(ctIJKToRAS)
 
 segNode = slicer.mrmlScene.GetFirstNodeByName("seg")
 if not segNode:
@@ -29,6 +44,12 @@ if not meshNode:
     meshNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode")
     meshNode.SetName("mesh")
     meshNode.CreateDefaultDisplayNodes()
+
+originalMeshNode = slicer.mrmlScene.GetFirstNodeByName("originalMesh")
+if not originalMeshNode:
+    originalMeshNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode")
+    originalMeshNode.SetName("originalMesh")
+    originalMeshNode.CreateDefaultDisplayNodes()
 
 labelNode = slicer.mrmlScene.GetFirstNodeByName("label")
 if not labelNode:
@@ -51,6 +72,7 @@ if not cavityGradientNode:
     cavityGradientNode.SetName("cavityGradient")
 
 # create mesh points
+print("meshing...")
 
 segBounds = numpy.ndarray(6)
 segNode.GetRASBounds(segBounds)
@@ -113,7 +135,8 @@ for tetraID,centroid in enumerate(centroidsArray):
     mins = bounds[::2]
     maxes = bounds[1::2]
     maxSize = (maxes-mins).max()
-    if labelArray[centroidIndex] and maxSize < targetMaxEdgeMM:
+    #if labelArray[centroidIndex] and maxSize < targetMaxEdgeMM:
+    if maxSize < targetMaxEdgeMM:
         tetrahedraToKeep.InsertNextId(tetraID)
 
 extractCells = vtk.vtkExtractCells()
@@ -124,39 +147,72 @@ extractCells.Update()
 extractedMeshGrid = extractCells.GetOutputDataObject(0)
 meshNode.SetAndObserveMesh(extractedMeshGrid)
 
-# Create the lung cavity
+originalMeshGrid = vtk.vtkUnstructuredGrid()
+originalMeshGrid.DeepCopy(extractedMeshGrid)
+originalMeshNode.SetAndObserveMesh(originalMeshGrid)
+originalMeshNode.GetDisplayNode().SetRepresentation(slicer.vtkMRMLDisplayNode.WireframeRepresentation)
 
-cavityImage = vtk.vtkImageData()
-cavityImage.DeepCopy(labelNode.GetImageData())
-cavityLabelNode.SetAndObserveImageData(cavityImage)
-cavityArray = slicer.util.arrayFromVolume(cavityLabelNode)
-cavityArray[labelArray != 0] = 0 # clear all lung material
-cavityArray[labelArray == 0] = 1 # set all non-lung material
-slicer.util.arrayFromVolumeModified(cavityLabelNode)
+# Create the lung cavity
+print("creating cavity...")
+
+cavityLabelImage = cavityLabelNode.GetImageData()
+if not cavityLabelImage:
+    cavityLabelImage = vtk.vtkImageData()
+    cavityLabelImage.DeepCopy(labelNode.GetImageData())
+    cavityLabelNode.SetAndObserveImageData(cavityLabelImage)
+    cavityArray = slicer.util.arrayFromVolume(cavityLabelNode)
+    cavityArray[labelArray != 0] = 0 # clear all lung material
+    cavityArray[labelArray == 0] = 1 # set all non-lung material
+    slicer.util.arrayFromVolumeModified(cavityLabelNode)
+
+if not ctLungNode.GetImageData() or not ctCavityNode.GetImageData():
+    ctLungImage = vtk.vtkImageData()
+    ctLungImage.DeepCopy(ctNode.GetImageData())
+    ctLungNode.SetAndObserveImageData(ctLungImage)
+    ctLungArray = slicer.util.arrayFromVolume(ctLungNode)
+    ctLungArray[cavityArray == 1] = ctTransparentValue
+    slicer.util.arrayFromVolumeModified(ctLungNode)
+    ctLungNode.CreateDefaultDisplayNodes()
+    ctLungNode.GetDisplayNode().SetApplyThreshold(True)
+    ctLungNode.GetDisplayNode().SetAutoWindowLevel(False)
+    ctLungNode.GetDisplayNode().SetWindow(ctWindow)
+    ctLungNode.GetDisplayNode().SetLevel(ctLevel)
+    ctLungNode.GetDisplayNode().SetLowerThreshold(ctThresholdValue)
+    ctCavityImage = vtk.vtkImageData()
+    ctCavityImage.DeepCopy(ctNode.GetImageData())
+    ctCavityNode.SetAndObserveImageData(ctCavityImage)
+    ctCavityArray = slicer.util.arrayFromVolume(ctCavityNode)
+    ctCavityArray[cavityArray == 0] = ctAirValue
+    slicer.util.arrayFromVolumeModified(ctCavityNode)
+    ctCavityNode.CreateDefaultDisplayNodes()
+    ctCavityNode.GetDisplayNode().SetAutoWindowLevel(False)
+    ctCavityNode.GetDisplayNode().SetWindow(ctWindow)
+    ctCavityNode.GetDisplayNode().SetLevel(ctLevel)
+
 
 # make the cavity vector field (gradient)
 
-ijkToRAS = vtk.vtkMatrix4x4()
-labelNode.GetIJKToRASMatrix(ijkToRAS)
-cavityCast = vtk.vtkImageCast() # TODO: make 1mm isotropic with identity ijkToRAS
-cavityCast.SetOutputScalarTypeToFloat()
-cavityCast.SetInputData(cavityImage)
-cavityDistance = vtk.vtkImageEuclideanDistance() # TODO sqrt?
-cavityDistance.SetInputConnection(cavityCast.GetOutputPort())
-cavityMath = vtk.vtkImageMathematics()
-cavityMath.SetOperationToSquareRoot()
-cavityMath.SetInputConnection(cavityDistance.GetOutputPort())
-cavityGradient = vtk.vtkImageGradient()
-cavityGradient.SetDimensionality(3)
-cavityGradient.SetInputConnection(cavityMath.GetOutputPort())
-cavityGradient.Update()
-cavityDistanceNode.SetAndObserveImageData(cavityMath.GetOutputDataObject(0))
-cavityGradientNode.SetAndObserveImageData(cavityGradient.GetOutputDataObject(0))
-cavityLabelNode.SetIJKToRASMatrix(ijkToRAS)
-cavityDistanceNode.SetIJKToRASMatrix(ijkToRAS)
-cavityGradientNode.SetIJKToRASMatrix(ijkToRAS)
+if not cavityDistanceNode.GetImageData() or not cavityGradientNode.GetImageData():
+    cavityCast = vtk.vtkImageCast() # TODO: make 1mm isotropic with identity ijkToRAS
+    cavityCast.SetOutputScalarTypeToFloat()
+    cavityCast.SetInputData(cavityLabelImage)
+    cavityDistance = vtk.vtkImageEuclideanDistance() # TODO sqrt?
+    cavityDistance.SetInputConnection(cavityCast.GetOutputPort())
+    cavityMath = vtk.vtkImageMathematics()
+    cavityMath.SetOperationToSquareRoot()
+    cavityMath.SetInputConnection(cavityDistance.GetOutputPort())
+    cavityGradient = vtk.vtkImageGradient()
+    cavityGradient.SetDimensionality(3)
+    cavityGradient.SetInputConnection(cavityMath.GetOutputPort())
+    cavityGradient.Update()
+    cavityDistanceNode.SetAndObserveImageData(cavityMath.GetOutputDataObject(0))
+    cavityGradientNode.SetAndObserveImageData(cavityGradient.GetOutputDataObject(0))
+    cavityLabelNode.SetIJKToRASMatrix(ctIJKToRAS)
+    cavityDistanceNode.SetIJKToRASMatrix(ctIJKToRAS)
+    cavityGradientNode.SetIJKToRASMatrix(ctIJKToRAS)
 
 # create displacement array
+print("Configuring variables...")
 
 displacementVTKArray = vtk.vtkFloatArray()
 displacementVTKArray.SetNumberOfComponents(3)
@@ -240,9 +296,15 @@ displacementGrid.SetSpacing(probeImage.GetSpacing())
 # TODO: see if there's a way to regularize the transform to avoid needing to turn off convergence warnings
 displacementGridNode.SetGlobalWarningDisplay(0)
 
+ctLungNode.SetAndObserveTransformNodeID(displacementGridNode.GetID())
+segNode.SetAndObserveTransformNodeID(displacementGridNode.GetID())
+
+slicer.util.setSliceViewerLayers(background=ctCavityNode, foreground=ctLungNode, foregroundOpacity=1, fit=True)
+
 #
 # do the sofa part
 #
+print("Initializing SOFA...")
 
 import Sofa
 import SofaRuntime
@@ -254,7 +316,7 @@ from stlib3.physics.rigid import Floor
 from splib3.numerics import Vec3
 
 dt = 0.05
-gravityVector = [0, -1000 * 3, 0]
+gravityVector = [-3000, 0, 0]
 
 vonMisesMode = {
     "none": 0,
@@ -343,6 +405,7 @@ Sofa.Simulation.reset(rootSofaNode)
 mechanicalState = meshSofaNode.getMechanicalState()
 forceField = meshSofaNode.getForceField(0)
 
+print("Starting simulation...")
 iteration = 0
 iterations = 30
 simulating = True
@@ -385,5 +448,4 @@ def updateSimulation():
     else:
         print("Simlation stopped")
 
-updateSimulation()
-
+#updateSimulation()
