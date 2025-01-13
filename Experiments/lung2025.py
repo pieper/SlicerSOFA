@@ -2,7 +2,7 @@ import math
 import numpy
 import vtk.util.numpy_support
 
-targetNodeSize = 15
+targetNodeSize = 20
 meshPadding = 2 * targetNodeSize
 targetMaxEdge = 1.1 * targetNodeSize
 
@@ -16,6 +16,11 @@ ctLevel = -500
 
 attachmentRAS = numpy.array([38.49312772285862, 159.75102715306605, -225.53033447265625])
 attachmentRadius = 42
+
+penetrationPenalty = 5
+
+dt = 0.05
+gravityVector = [-60000, 0, 0]
 
 # set up input data
 print("loading...")
@@ -344,8 +349,6 @@ from stlib3.physics.deformable import ElasticMaterialObject
 from stlib3.physics.rigid import Floor
 from splib3.numerics import Vec3
 
-dt = 0.05
-gravityVector = [-3000, 0, 0]
 
 vonMisesMode = {
     "none": 0,
@@ -427,7 +430,6 @@ meshSofaNode.addObject('TetrahedronFEMForceField', name="FEM",
 meshSofaNode.addObject('MeshMatrixMass', totalMass=1)
 
 forceVectorArray = numpy.zeros_like(surfacePointsArray)
-forceVectorArray[:,1] = 10
 surfaceForces = meshSofaNode.addObject('ConstantForceField', indices=surfacePointIDs, forces=forceVectorArray)
 
 vesselAttachments = meshSofaNode.addChild('VesselAttachments')
@@ -474,7 +476,14 @@ def updateSimulation():
 
     # create reaction forces
     with surfaceForces.forces.writeableArray() as forces:
-        forces[:] *= 1.01
+        reactionForces = numpy.zeros_like(forces)
+        for index in range(len(surfacePointsArray)):
+            if attachedPoints[surfacePointIDs[index]]:
+                continue
+            displacedRAS = modelPointsArray[surfacePointIDs[index]]
+            penetration = displacedRAS[0] - attachmentRAS[0]
+            if penetration < 0:
+                forces[index] = numpy.array([-1. * penetration * penetrationPenalty, 0, 0])
 
     iteration += 1
     simulating = iteration < iterations
