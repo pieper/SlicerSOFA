@@ -19,8 +19,10 @@ attachmentRadius = 42
 
 penetrationPenalty = 5
 
+poissonRatio=0.15
+
 dt = 0.05
-gravityVector = [-60000, 0, 0]
+gravityVector = [-50000, 0, 0]
 
 # set up input data
 print("loading...")
@@ -424,7 +426,7 @@ meshSofaNode.addObject('TetrahedronSetTopologyModifier', name="Modifier")
 meshSofaNode.addObject('MechanicalObject', name="mstate", template="Vec3d")
 meshSofaNode.addObject('TetrahedronFEMForceField', name="FEM",
                        youngModulus=youngModulusArray,
-                       poissonRatio=0.45,
+                       poissonRatio=poissonRatio,
                        method="large",
                        computeVonMisesStress=vonMisesMode['fullGreen'])
 meshSofaNode.addObject('MeshMatrixMass', totalMass=1)
@@ -475,16 +477,23 @@ def updateSimulation():
     slicer.util.arrayFromGridTransformModified(displacementGridNode)
 
     # create reaction forces
+    lpsToRAS = numpy.array([-1,-1,1]) # TODO apply rasToRAS to gradients and include spacing
     with surfaceForces.forces.writeableArray() as forces:
         reactionForces = numpy.zeros_like(forces)
         for index in range(len(surfacePointsArray)):
             if attachedPoints[surfacePointIDs[index]]:
                 continue
             displacedRAS = modelPointsArray[surfacePointIDs[index]]
-            penetration = displacedRAS[0] - attachmentRAS[0]
-            if penetration < 0:
-                forces[index] = numpy.array([-1. * penetration * penetrationPenalty, 0, 0])
+            pointIndex = rasPointToIndex(rasToIJK, numpy.array([*displacedRAS,1]))
+            try:
+                penetration = cavityDistanceArray[pointIndex]
+            except IndexError:
+                continue
+            if penetration > 0:
+                gradient = lpsToRAS * cavityGradientArray[pointIndex]
+                forces[index] = -1 * penetration * penetrationPenalty * gradient
 
+    # iteration management
     iteration += 1
     simulating = iteration < iterations
     if iteration % 10 == 0:
