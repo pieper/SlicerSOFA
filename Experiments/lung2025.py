@@ -426,35 +426,9 @@ meshSofaNode.addObject('TetrahedronFEMForceField', name="FEM",
                        computeVonMisesStress=vonMisesMode['fullGreen'])
 meshSofaNode.addObject('MeshMatrixMass', totalMass=1)
 
-
-
-# TODO: ignore sofa pressure and use cavity gradient instead
-notWorkingSurfacePressure = """
-
-surfaceSofaNode = meshSofaNode.addChild("surface")
-surfaceSofaNode.addObject('TriangleSetTopologyContainer', name="SurfaceContainer",
-                       position=surfacePointsArray,
-                       triangles=surfaceTrianglesArray)
-surfaceSofaNode.addObject('MechanicalObject', name='surfaceMState', src='@SurfaceContainer')
-surfaceSofaNode.addObject('SurfacePressureForceField', name="SurfacePressure",
-                       topology='@SurfaceContainer',
-                       triangleIndices='@SurfaceContainer.triangles',
-                       pressure=-3000)
-surfaceSofaNode.addObject('BarycentricMapping', mapForces='true', mapMasses='false')
-
-
-
-    meshSofaNode.addObject('SurfacePressureForceField', name="SurfacePressure",
-                           triangleIndices=surfaceTrianglesInMesh, pressure=0)
-
-
-    meshSofaNode.addObject('TriangleSetTopologyContainer', name="SurfaceContainer",
-                           position=surfacePointsArray,
-                           triangles=surfaceTrianglesArray)
-    meshSofaNode.addObject('SurfacePressureForceField', name="SurfacePressure",
-                           topology='@SurfaceContainer', triangleIndices=surfaceTrianglesArray, pressure=-3000)
-"""
-
+forceVectorArray = numpy.zeros_like(surfacePointsArray)
+forceVectorArray[:,1] = 10
+surfaceForces = meshSofaNode.addObject('ConstantForceField', indices=surfacePointIDs, forces=forceVectorArray)
 
 vesselAttachments = meshSofaNode.addChild('VesselAttachments')
 vesselAttachments.addObject('FixedConstraint', indices=numpy.where(attachedPoints))
@@ -497,6 +471,10 @@ def updateSimulation():
     gridArray = slicer.util.arrayFromGridTransform(displacementGridNode)
     gridArray[:] = -1. * probeArray
     slicer.util.arrayFromGridTransformModified(displacementGridNode)
+
+    # create reaction forces
+    with surfaceForces.forces.writeableArray() as forces:
+        forces[:] *= 1.01
 
     iteration += 1
     simulating = iteration < iterations
