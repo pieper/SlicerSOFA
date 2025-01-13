@@ -246,6 +246,22 @@ attachedPoints = numpy.linalg.norm(pointsArray - attachmentRAS, axis=1) < attach
 cellsArray = numpy.array(extractedMeshGrid.GetCells().GetData())
 extractedTetrahedraArray = cellsArray.reshape(-1,5)[:,1:5]
 
+# get surface points and triangles
+
+surfaceFilter = vtk.vtkDataSetSurfaceFilter()
+surfaceFilter.SetInputData(extractedMeshGrid)
+surfaceFilter.SetPassThroughPointIds(True)
+surfaceFilter.Update()
+
+surfacePolyData = surfaceFilter.GetOutputDataObject(0)
+surfacePointIDs = vtk.util.numpy_support.vtk_to_numpy(surfacePolyData.GetPointData().GetArray("vtkOriginalPointIds"))
+surfaceCellsArray = numpy.array(surfacePolyData.GetPolys().GetData())
+surfaceTrianglesArray = surfaceCellsArray.reshape(-1,4)[:,1:4]
+surfacePointsArray = vtk.util.numpy_support.vtk_to_numpy(surfacePolyData.GetPoints().GetData())
+
+# tetmesh indices of surface triangles
+surfaceTrianglesInMesh = surfacePointIDs[surfaceTrianglesArray.flatten()].reshape(-1,3)
+
 # Set up probe to calculate grid transform
 
 # TODO: this function belongs in slicer.util
@@ -410,6 +426,36 @@ meshSofaNode.addObject('TetrahedronFEMForceField', name="FEM",
                        computeVonMisesStress=vonMisesMode['fullGreen'])
 meshSofaNode.addObject('MeshMatrixMass', totalMass=1)
 
+
+
+# TODO: ignore sofa pressure and use cavity gradient instead
+notWorkingSurfacePressure = """
+
+surfaceSofaNode = meshSofaNode.addChild("surface")
+surfaceSofaNode.addObject('TriangleSetTopologyContainer', name="SurfaceContainer",
+                       position=surfacePointsArray,
+                       triangles=surfaceTrianglesArray)
+surfaceSofaNode.addObject('MechanicalObject', name='surfaceMState', src='@SurfaceContainer')
+surfaceSofaNode.addObject('SurfacePressureForceField', name="SurfacePressure",
+                       topology='@SurfaceContainer',
+                       triangleIndices='@SurfaceContainer.triangles',
+                       pressure=-3000)
+surfaceSofaNode.addObject('BarycentricMapping', mapForces='true', mapMasses='false')
+
+
+
+    meshSofaNode.addObject('SurfacePressureForceField', name="SurfacePressure",
+                           triangleIndices=surfaceTrianglesInMesh, pressure=0)
+
+
+    meshSofaNode.addObject('TriangleSetTopologyContainer', name="SurfaceContainer",
+                           position=surfacePointsArray,
+                           triangles=surfaceTrianglesArray)
+    meshSofaNode.addObject('SurfacePressureForceField', name="SurfacePressure",
+                           topology='@SurfaceContainer', triangleIndices=surfaceTrianglesArray, pressure=-3000)
+"""
+
+
 vesselAttachments = meshSofaNode.addChild('VesselAttachments')
 vesselAttachments.addObject('FixedConstraint', indices=numpy.where(attachedPoints))
 
@@ -440,7 +486,7 @@ def updateSimulation():
 
     # update grid transform from displacements
     displacementArray = slicer.util.arrayFromModelPointData(meshNode, "Displacement")
-    displacementArray[:] = (mechanicalState.position - mechanicalState.rest_position) 
+    displacementArray[:] = (mechanicalState.position - mechanicalState.rest_position)
     slicer.util.arrayFromModelPointsModified(meshNode)
     probeFilter.Update()
     probeImage = probeFilter.GetOutputDataObject(0)
