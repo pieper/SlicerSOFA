@@ -6,7 +6,7 @@ targetNodeSize = 20
 meshPadding = 2 * targetNodeSize
 targetMaxEdge = 1.1 * targetNodeSize
 
-probeDimension = 10
+probeDimension = 20
 
 ctTransparentValue = -2048 # well below CT air
 ctThresholdValue = -2047
@@ -17,11 +17,12 @@ ctLevel = -500
 attachmentRAS = numpy.array([38.49312772285862, 159.75102715306605, -225.53033447265625])
 attachmentRadius = 42
 
-penetrationPenalty = 5
+penetrationPenalty = 15
 
-poissonRatio=0.15
+poissonRatio=0.48
+youngModulus = 1.5
 
-dt = 0.05
+dt = 0.025
 gravityVector = [-50000, 0, 0]
 
 # set up input data
@@ -77,6 +78,11 @@ cavityGradientNode = slicer.mrmlScene.GetFirstNodeByName("cavityGradient")
 if not cavityGradientNode:
     cavityGradientNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLVectorVolumeNode")
     cavityGradientNode.SetName("cavityGradient")
+
+shrinkTransform = slicer.mrmlScene.GetFirstNodeByName("shrink")
+if not shrinkTransform:
+    shrinkTransform = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLinearTransformNode")
+    shrinkTransform.SetName("shrink")
 
 # Create the lung cavity
 print("creating cavity...")
@@ -153,8 +159,8 @@ segBounds = numpy.ndarray(6)
 segNode.GetRASBounds(segBounds)
 axes = []
 for start,end in segBounds.reshape(-1,2):
-    start -= meshPadding
-    end += meshPadding
+    start -= 0*meshPadding
+    end += 0*meshPadding
     nodeCount = math.ceil((end-start) / targetNodeSize)
     axes.append(numpy.linspace(start, end, nodeCount))
 gridPoints = numpy.transpose(numpy.meshgrid(*axes))
@@ -177,13 +183,11 @@ def rasPointToIndex(rasToIJK, rasPoint):
 for p in inputPoints:
     pointIndex = rasPointToIndex(rasToIJK, p)
     # if labelArray[pointIndex]: TESTING
-    if cavityDistanceArray[pointIndex] < meshPadding:
-        points.InsertNextPoint(*p[:3])
-    """
-    else:
-        points.InsertNextPoint(*p[:3])
-    """
-
+    try:
+        if cavityDistanceArray[pointIndex] < meshPadding:
+            points.InsertNextPoint(*p[:3])
+    except IndexError:
+        pass
 pointSet.SetPoints(points)
 
 delaunay = vtk.vtkDelaunay3D()
@@ -210,7 +214,6 @@ for tetraID,centroid in enumerate(centroidsArray):
     mins = bounds[::2]
     maxes = bounds[1::2]
     maxSize = (maxes-mins).max()
-    #if labelArray[centroidIndex] and maxSize < targetMaxEdge: TESTING
     if maxSize < targetMaxEdge:
         tetrahedraToKeep.InsertNextId(tetraID)
 
@@ -227,7 +230,6 @@ originalMeshGrid = vtk.vtkUnstructuredGrid()
 originalMeshGrid.DeepCopy(extractedMeshGrid)
 originalMeshNode.SetAndObserveMesh(originalMeshGrid)
 originalMeshNode.GetDisplayNode().SetRepresentation(slicer.vtkMRMLDisplayNode.WireframeRepresentation)
-
 
 # create displacement array
 print("Configuring variables...")
@@ -259,6 +261,7 @@ surfaceFilter = vtk.vtkDataSetSurfaceFilter()
 surfaceFilter.SetInputData(extractedMeshGrid)
 surfaceFilter.SetPassThroughPointIds(True)
 surfaceFilter.Update()
+
 
 surfacePolyData = surfaceFilter.GetOutputDataObject(0)
 surfacePointIDs = vtk.util.numpy_support.vtk_to_numpy(surfacePolyData.GetPointData().GetArray("vtkOriginalPointIds"))
@@ -304,11 +307,10 @@ probeGrid.SetDimensions(probeDimension, probeDimension, probeDimension)
 probeGrid.AllocateScalars(vtk.VTK_DOUBLE, 1)
 meshBounds = numpy.ndarray(6)
 meshNode.GetRASBounds(meshBounds)
-meshMins = meshBounds[::2]
-meshMaxes = meshBounds[1::2]
+meshMins = meshBounds[::2] + meshPadding
+meshMaxes = meshBounds[1::2] - meshPadding
 probeSize = meshMaxes - meshMins
 probeGrid.SetOrigin(*meshMins)
-#probeGrid.SetSpacing(probeSize[0]/probeDimension, probeSize[1]/probeDimension, probeSize[2]/probeDimension)
 probeGrid.SetSpacing(*(probeSize/probeDimension))
 
 probeFilter = vtk.vtkProbeFilter()
@@ -335,7 +337,7 @@ displacementGridNode.SetGlobalWarningDisplay(0)
 ctLungNode.SetAndObserveTransformNodeID(displacementGridNode.GetID())
 segNode.SetAndObserveTransformNodeID(displacementGridNode.GetID())
 
-slicer.util.setSliceViewerLayers(background=ctCavityNode, foreground=ctLungNode, foregroundOpacity=1, fit=True)
+slicer.util.setSliceViewerLayers(background=ctCavityNode, foreground=ctLungNode, foregroundOpacity=1)
 
 #
 # do the sofa part
@@ -369,7 +371,6 @@ youngModulusArray = numpy.ones(centroidsArray.shape[0]) * youngModulusBase
 elementsOnRight = numpy.where(centroidsArray[:,0] > 0)[0]
 youngModulusArray[elementsOnRight] += 3
 """
-youngModulusArray = 1.5
 
 # build the Sofa scene
 
@@ -425,7 +426,7 @@ meshSofaNode.addObject('TetrahedronSetTopologyContainer', name="Container",
 meshSofaNode.addObject('TetrahedronSetTopologyModifier', name="Modifier")
 meshSofaNode.addObject('MechanicalObject', name="mstate", template="Vec3d")
 meshSofaNode.addObject('TetrahedronFEMForceField', name="FEM",
-                       youngModulus=youngModulusArray,
+                       youngModulus=youngModulus,
                        poissonRatio=poissonRatio,
                        method="large",
                        computeVonMisesStress=vonMisesMode['fullGreen'])
@@ -441,6 +442,13 @@ Sofa.Simulation.init(rootSofaNode)
 Sofa.Simulation.reset(rootSofaNode)
 mechanicalState = meshSofaNode.getMechanicalState()
 forceField = meshSofaNode.getForceField(0)
+
+shrinkMatrix = vtk.vtkMatrix4x4()
+shrinkMatrix.SetElement(0,0, 0.75)
+shrinkMatrix.SetElement(1,1, 0.95)
+shrinkMatrix.SetElement(2,2, 0.85)
+shrinkTransform.SetMatrixTransformToParent(shrinkMatrix)
+displacementGridNode.SetAndObserveTransformNodeID(shrinkTransform.GetID())
 
 print("Starting simulation...")
 iteration = 0
@@ -462,7 +470,7 @@ def updateSimulation():
     stressArray[:] = forceField.vonMisesPerElement.array()
     slicer.util.arrayFromModelCellDataModified(meshNode, "VonMisesStress")
 
-    # update grid transform from displacements
+    # update model points and grid transform from displacements
     displacementArray = slicer.util.arrayFromModelPointData(meshNode, "Displacement")
     displacementArray[:] = (mechanicalState.position - mechanicalState.rest_position)
     slicer.util.arrayFromModelPointsModified(meshNode)
