@@ -1,3 +1,12 @@
+"""
+export SLICER=/opt/sr
+export DIR=/Users/pieper/slicer/latest/SOFA
+export SOFA_ROOT=${DIR}/SlicerSOFA-build/SOFA-build
+${SLICER}/Slicer-build/Slicer \
+        --launcher-additional-settings \
+            ${DIR}/SlicerSOFA-build/inner-build/AdditionalLauncherSettings.ini
+"""
+
 import math
 import numpy
 import vtk.util.numpy_support
@@ -19,17 +28,33 @@ attachmentRadius = 42
 
 penetrationPenalty = 15
 
-poissonRatio=0.48
-youngModulus = 1.5
+#poissonRatio=0.48
+poissonRatio=0.38
+#youngModulus = 1.5
+youngModulus = 1.0
 
-dt = 0.025
-gravityVector = [-50000, 0, 0]
+duration = 1
+steps = 5000
+dt = 0.0125
+#dt = duration / steps
+#gravityVector = [-50000, 0, 0]
+#gravityVector = [50000, 0, 0]
+gravityVector = [-60000, 0, 0]
+
+#cavityCollisionMethod = "NewProximityIntersection"
+cavityCollisionMethod = "LocalMinDistance"
+#cavityCollisionMethod = "MinProximityIntersection"
+cavityAlarmDistance = 10.0
+cavityContactDistance = 5
+cavityFriction=0.001
 
 # set up input data
 print("loading...")
 
 ctFilePath = "/opt/data/SlicerLung/EservalRocha/Model case/6 VOL MEDIASTINO.nrrd"
 segFilePath = "/opt/data/SlicerLung/EservalRocha/Model case/RightLung.seg.nrrd"
+cavityDistanceFilePath = "/opt/data/SlicerLung/EservalRocha/Model case/cavityDistance.nrrd"
+#cavityGradientFilePath = "/opt/data/SlicerLung/EservalRocha/Model case/cavityGradient.nrrd"
 
 ctNode = slicer.mrmlScene.GetFirstNodeByName("ct")
 if not ctNode:
@@ -69,15 +94,23 @@ if not cavityLabelNode:
     cavityLabelNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode")
     cavityLabelNode.SetName("cavityLabel")
 
+cavitySegmentationNode = slicer.mrmlScene.GetFirstNodeByName("cavitySegmentation")
+if not cavitySegmentationNode:
+    cavitySegmentationNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode")
+    cavitySegmentationNode.SetName("cavitySegmentation")
+    cavitySegmentationNode.CreateDefaultDisplayNodes()
+
 cavityDistanceNode = slicer.mrmlScene.GetFirstNodeByName("cavityDistance")
 if not cavityDistanceNode:
-    cavityDistanceNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode")
-    cavityDistanceNode.SetName("cavityDistance")
+    #cavityDistanceNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode")
+    #cavityDistanceNode.SetName("cavityDistance")
+    cavityDistanceNode = slicer.util.loadVolume(cavityDistanceFilePath, properties = {"name": "cavityDistance"})
 
-cavityGradientNode = slicer.mrmlScene.GetFirstNodeByName("cavityGradient")
-if not cavityGradientNode:
-    cavityGradientNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLVectorVolumeNode")
-    cavityGradientNode.SetName("cavityGradient")
+#cavityGradientNode = slicer.mrmlScene.GetFirstNodeByName("cavityGradient")
+#if not cavityGradientNode:
+    #cavityGradientNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLVectorVolumeNode")
+    #cavityGradientNode.SetName("cavityGradient")
+    #cavityGradientNode = slicer.util.loadVolume(cavityGradientFilePath, properties = {"name": "cavityGradient"})
 
 shrinkTransform = slicer.mrmlScene.GetFirstNodeByName("shrink")
 if not shrinkTransform:
@@ -103,6 +136,24 @@ if not cavityLabelImage:
     cavityArray[labelArray != 0] = 0 # clear all lung material
     cavityArray[labelArray == 0] = 1 # set all non-lung material
     slicer.util.arrayFromVolumeModified(cavityLabelNode)
+
+cavitySegmentCount = cavitySegmentationNode.GetSegmentation().GetNumberOfSegments()
+if cavitySegmentCount == 0:
+    slicer.vtkSlicerSegmentationsModuleLogic.ImportLabelmapToSegmentationNode(
+            cavityLabelNode,
+            cavitySegmentationNode)
+    segmentID = cavitySegmentationNode.GetSegmentation().GetSegmentIDs()[0]
+    segmentationArray = slicer.util.arrayFromSegmentBinaryLabelmap(
+                            cavitySegmentationNode, segmentID, ctNode)
+    segmentationArray[:] = 1 * numpy.logical_not(cavityArray)
+    slicer.util.updateSegmentBinaryLabelmapFromArray(
+                            segmentationArray, cavitySegmentationNode, segmentID, ctNode)
+    closedSurfaceName = slicer.vtkSegmentationConverter.GetSegmentationClosedSurfaceRepresentationName()
+    cavitySegmentationNode.GetSegmentation().CreateRepresentation(closedSurfaceName)
+    cavityPolyData = vtk.vtkPolyData()
+    cavitySegmentationNode.GetClosedSurfaceRepresentation(segmentID, cavityPolyData)
+    cavitySegmentationNode.GetDisplayNode().SetOpacity(0.3)
+
 
 if not ctLungNode.GetImageData() or not ctCavityNode.GetImageData():
     ctLungImage = vtk.vtkImageData()
@@ -131,7 +182,8 @@ if not ctLungNode.GetImageData() or not ctCavityNode.GetImageData():
 
 # make the cavity vector field (gradient)
 
-if not cavityDistanceNode.GetImageData() or not cavityGradientNode.GetImageData():
+# if not cavityDistanceNode.GetImageData() or not cavityGradientNode.GetImageData():
+if not cavityDistanceNode.GetImageData():
     cavityCast = vtk.vtkImageCast() # TODO: make 1mm isotropic with identity ijkToRAS
     cavityCast.SetOutputScalarTypeToFloat()
     cavityCast.SetInputData(cavityLabelImage)
@@ -140,17 +192,17 @@ if not cavityDistanceNode.GetImageData() or not cavityGradientNode.GetImageData(
     cavityMath = vtk.vtkImageMathematics()
     cavityMath.SetOperationToSquareRoot()
     cavityMath.SetInputConnection(cavityDistance.GetOutputPort())
-    cavityGradient = vtk.vtkImageGradient()
-    cavityGradient.SetDimensionality(3)
-    cavityGradient.SetInputConnection(cavityMath.GetOutputPort())
-    cavityGradient.Update()
+    #cavityGradient = vtk.vtkImageGradient()
+    #cavityGradient.SetDimensionality(3)
+    #cavityGradient.SetInputConnection(cavityMath.GetOutputPort())
+    #cavityGradient.Update()
     cavityDistanceNode.SetAndObserveImageData(cavityMath.GetOutputDataObject(0))
-    cavityGradientNode.SetAndObserveImageData(cavityGradient.GetOutputDataObject(0))
+    #cavityGradientNode.SetAndObserveImageData(cavityGradient.GetOutputDataObject(0))
     cavityLabelNode.SetIJKToRASMatrix(ctIJKToRAS)
     cavityDistanceNode.SetIJKToRASMatrix(ctIJKToRAS)
-    cavityGradientNode.SetIJKToRASMatrix(ctIJKToRAS)
+    #cavityGradientNode.SetIJKToRASMatrix(ctIJKToRAS)
 cavityDistanceArray = slicer.util.arrayFromVolume(cavityDistanceNode)
-cavityGradientArray = slicer.util.arrayFromVolume(cavityGradientNode)
+#cavityGradientArray = slicer.util.arrayFromVolume(cavityGradientNode)
 
 # create mesh points
 print("meshing...")
@@ -214,7 +266,7 @@ for tetraID,centroid in enumerate(centroidsArray):
     mins = bounds[::2]
     maxes = bounds[1::2]
     maxSize = (maxes-mins).max()
-    if maxSize < targetMaxEdge:
+    if maxSize < 2 * targetMaxEdge:
         tetrahedraToKeep.InsertNextId(tetraID)
 
 extractCells = vtk.vtkExtractCells()
@@ -251,7 +303,7 @@ meshNode.GetMesh().GetCellData().AddArray(stressVTKArray)
 # get pointIDs in attachment sphere
 
 extractedPointsArray = numpy.array(extractedMeshGrid.GetPoints().GetData())
-attachedPoints = numpy.linalg.norm(pointsArray - attachmentRAS, axis=1) < attachmentRadius
+attachedPointMap = numpy.linalg.norm(pointsArray - attachmentRAS, axis=1) < attachmentRadius
 cellsArray = numpy.array(extractedMeshGrid.GetCells().GetData())
 extractedTetrahedraArray = cellsArray.reshape(-1,5)[:,1:5]
 
@@ -260,10 +312,12 @@ extractedTetrahedraArray = cellsArray.reshape(-1,5)[:,1:5]
 surfaceFilter = vtk.vtkDataSetSurfaceFilter()
 surfaceFilter.SetInputData(extractedMeshGrid)
 surfaceFilter.SetPassThroughPointIds(True)
-surfaceFilter.Update()
+surfaceNormals = vtk.vtkPolyDataNormals()
+surfaceNormals.SetInputConnection(surfaceFilter.GetOutputPort())
+surfaceNormals.Update()
 
-
-surfacePolyData = surfaceFilter.GetOutputDataObject(0)
+surfacePolyData = surfaceNormals.GetOutputDataObject(0)
+surfacePointNormals = vtk.util.numpy_support.vtk_to_numpy(surfacePolyData.GetPointData().GetArray("Normals"))
 surfacePointIDs = vtk.util.numpy_support.vtk_to_numpy(surfacePolyData.GetPointData().GetArray("vtkOriginalPointIds"))
 surfaceCellsArray = numpy.array(surfacePolyData.GetPolys().GetData())
 surfaceTrianglesArray = surfaceCellsArray.reshape(-1,4)[:,1:4]
@@ -271,6 +325,11 @@ surfacePointsArray = vtk.util.numpy_support.vtk_to_numpy(surfacePolyData.GetPoin
 
 # tetmesh indices of surface triangles
 surfaceTrianglesInMesh = surfacePointIDs[surfaceTrianglesArray.flatten()].reshape(-1,3)
+
+# mesh indices of medial 1/2 of the surface 
+lrSurfaceNormals = surfacePointNormals.transpose()[0]
+medialSurface = lrSurfaceNormals < 0
+medialSurfaceMeshIndices = surfacePointIDs[numpy.where(medialSurface)]
 
 # Set up probe to calculate grid transform
 
@@ -332,7 +391,18 @@ displacementGrid.SetOrigin(probeImage.GetOrigin())
 displacementGrid.SetSpacing(probeImage.GetSpacing())
 
 # TODO: see if there's a way to regularize the transform to avoid needing to turn off convergence warnings
+# - could use a mesh quality filter to look for noninvertible nodes and auto-adjust the timestep
 displacementGridNode.SetGlobalWarningDisplay(0)
+
+# Extra visual deflation (not part of simulation)
+
+shrinkMatrix = vtk.vtkMatrix4x4()
+shrinkMatrix.SetElement(0,0, 0.75)
+shrinkMatrix.SetElement(1,1, 0.95)
+shrinkMatrix.SetElement(2,2, 0.85)
+shrinkTransform.SetMatrixTransformToParent(shrinkMatrix)
+#displacementGridNode.SetAndObserveTransformNodeID(shrinkTransform.GetID())
+
 
 ctLungNode.SetAndObserveTransformNodeID(displacementGridNode.GetID())
 segNode.SetAndObserveTransformNodeID(displacementGridNode.GetID())
@@ -377,6 +447,8 @@ youngModulusArray[elementsOnRight] += 3
 rootSofaNode = Sofa.Core.Node()
 
 MainHeader(rootSofaNode, plugins=[
+    "MultiThreading",
+    "Sofa.Component.AnimationLoop",
     "Sofa.Component.IO.Mesh",
     "Sofa.Component.LinearSolver.Direct",
     "Sofa.Component.LinearSolver.Iterative",
@@ -389,7 +461,6 @@ MainHeader(rootSofaNode, plugins=[
     "Sofa.Component.Topology.Container.Dynamic",
     "Sofa.Component.Visual",
     "Sofa.GL.Component.Rendering3D",
-    "Sofa.Component.AnimationLoop",
     "Sofa.Component.Collision.Detection.Algorithm",
     "Sofa.Component.Collision.Detection.Intersection",
     "Sofa.Component.Collision.Geometry",
@@ -414,43 +485,89 @@ rootSofaNode.addObject('FreeMotionAnimationLoop',
                    parallelODESolving=True,
                    parallelCollisionDetectionAndFreeMotion=True)
 """
+rootSofaNode.addObject('FreeMotionAnimationLoop')
 
-meshSofaNode = rootSofaNode.addChild('Mesh')
-meshSofaNode.addObject('EulerImplicitSolver', firstOrder=False, rayleighMass=0.1, rayleighStiffness=0.1)
-meshSofaNode.addObject('SparseLDLSolver', name="precond",
+# Collision of lung with cavity
+
+rootSofaNode.addObject("CollisionPipeline")
+rootSofaNode.addObject("ParallelBruteForceBroadPhase")
+rootSofaNode.addObject("ParallelBVHNarrowPhase")
+rootSofaNode.addObject(cavityCollisionMethod,
+                       alarmDistance=cavityAlarmDistance,
+                       contactDistance=cavityContactDistance)
+rootSofaNode.addObject("CollisionResponse",
+                       response="FrictionContactConstraint",
+                       responseParams=cavityFriction)
+rootSofaNode.addObject("GenericConstraintSolver")
+
+# lung mesh mechanics
+
+lungMeshSofaNode = rootSofaNode.addChild('LungMesh')
+lungMeshSofaNode.addObject('EulerImplicitSolver',
+                           firstOrder=False,
+                           rayleighMass=0.1,
+                           rayleighStiffness=0.1)
+lungMeshSofaNode.addObject('SparseLDLSolver', name="precond",
                        template="CompressedRowSparseMatrixd",
                        parallelInverseProduct=True)
-meshSofaNode.addObject('TetrahedronSetTopologyContainer', name="Container",
+lungMeshSofaNode.addObject('TetrahedronSetTopologyContainer', name="Container",
                        position=extractedPointsArray,
                        tetrahedra=extractedTetrahedraArray)
-meshSofaNode.addObject('TetrahedronSetTopologyModifier', name="Modifier")
-meshSofaNode.addObject('MechanicalObject', name="mstate", template="Vec3d")
-meshSofaNode.addObject('TetrahedronFEMForceField', name="FEM",
+lungMeshSofaNode.addObject('MechanicalObject', name="mstate", template="Vec3d")
+lungMeshSofaNode.addObject('TetrahedronFEMForceField', name="FEM",
                        youngModulus=youngModulus,
                        poissonRatio=poissonRatio,
                        method="large",
                        computeVonMisesStress=vonMisesMode['fullGreen'])
-meshSofaNode.addObject('MeshMatrixMass', totalMass=1)
+lungMeshSofaNode.addObject('MeshMatrixMass', totalMass=1)
+lungMeshSofaNode.addObject("LinearSolverConstraintCorrection")
 
-forceVectorArray = numpy.zeros_like(surfacePointsArray)
-surfaceForces = meshSofaNode.addObject('ConstantForceField', indices=surfacePointIDs, forces=forceVectorArray)
+lungCollisionSofaNode = lungMeshSofaNode.addChild("LungCollision")
+lungCollisionSofaNode.addObject("TriangleSetTopologyContainer")
+lungCollisionSofaNode.addObject("TriangleSetTopologyModifier")
+lungCollisionSofaNode.addObject("Tetra2TriangleTopologicalMapping")
+lungCollisionSofaNode.addObject("PointCollisionModel")
+lungCollisionSofaNode.addObject("LineCollisionModel")
+lungCollisionSofaNode.addObject("TriangleCollisionModel")
 
-vesselAttachments = meshSofaNode.addChild('VesselAttachments')
-vesselAttachments.addObject('FixedConstraint', indices=numpy.where(attachedPoints))
+################
+#### Sphere ####
+################
+"""
+sphere_node = rootSofaNode.addChild("sphere")
+#sphere_node.addObject("MeshOBJLoader", filename=str("./cavityBall.obj"), scale=1.0)
+sphere_node.addObject("MeshOBJLoader", filename=str("./bigCavity.obj"), scale=1.0)
+sphere_node.addObject("TriangleSetTopologyContainer", src=sphere_node.MeshOBJLoader.getLinkPath())
+sphere_node.addObject("TriangleSetTopologyModifier")
+sphere_node.addObject("MechanicalObject")
+# Paul says: NOTE: The important thing is to set bothSide=True for the collision models, so that both sides of the triangle are considered for collision.
+sphere_node.addObject("TriangleCollisionModel", bothSide=True)
+sphere_node.addObject("PointCollisionModel")
+sphere_node.addObject("LineCollisionModel")
+sphere_node.addObject("FixedProjectiveConstraint")
+"""
+
+# great vessels that hold lung to heart and medial wall
+
+vesselAttachments = lungMeshSofaNode.addChild('VesselAttachments')
+attachedPointIndices = numpy.where(attachedPointMap)[0]
+fixedIndices = numpy.unique(numpy.concatenate([attachedPointIndices, medialSurfaceMeshIndices]))
+vesselAttachments.addObject('FixedConstraint', indices=fixedIndices)
+
+# Runnning the simulation
 
 Sofa.Simulation.init(rootSofaNode)
 Sofa.Simulation.reset(rootSofaNode)
-mechanicalState = meshSofaNode.getMechanicalState()
-forceField = meshSofaNode.getForceField(0)
+mechanicalState = lungMeshSofaNode.getMechanicalState()
+forceField = lungMeshSofaNode.getForceField(0)
 
-shrinkMatrix = vtk.vtkMatrix4x4()
-shrinkMatrix.SetElement(0,0, 0.75)
-shrinkMatrix.SetElement(1,1, 0.95)
-shrinkMatrix.SetElement(2,2, 0.85)
-shrinkTransform.SetMatrixTransformToParent(shrinkMatrix)
-displacementGridNode.SetAndObserveTransformNodeID(shrinkTransform.GetID())
+# Convert LPS to RAS
+"""
+with sphere_node.MechanicalObject.position.writeable() as sphereArray:
+    sphereArray *= [-1,-1,1]
+"""
 
-print("Starting simulation...")
+print("Ready to start...")
 iteration = 0
 iterations = 30
 simulating = True
@@ -458,6 +575,9 @@ def updateSimulation():
     global iteration, iterations, simulating
 
     Sofa.Simulation.animate(rootSofaNode, rootSofaNode.dt.value)
+
+
+    # Bring back surface calculation and make nodes fixed when they exit cavity
 
     # update model from mechanical state
     meshPointsArray = mechanicalState.position.array()
@@ -484,23 +604,6 @@ def updateSimulation():
     gridArray[:] = -1. * probeArray
     slicer.util.arrayFromGridTransformModified(displacementGridNode)
 
-    # create reaction forces
-    lpsToRAS = numpy.array([-1,-1,1]) # TODO apply rasToRAS to gradients and include spacing
-    with surfaceForces.forces.writeableArray() as forces:
-        reactionForces = numpy.zeros_like(forces)
-        for index in range(len(surfacePointsArray)):
-            if attachedPoints[surfacePointIDs[index]]:
-                continue
-            displacedRAS = modelPointsArray[surfacePointIDs[index]]
-            pointIndex = rasPointToIndex(rasToIJK, numpy.array([*displacedRAS,1]))
-            try:
-                penetration = cavityDistanceArray[pointIndex]
-            except IndexError:
-                continue
-            if penetration > 0:
-                gradient = lpsToRAS * cavityGradientArray[pointIndex]
-                forces[index] = -1 * penetration * penetrationPenalty * gradient
-
     # iteration management
     iteration += 1
     simulating = iteration < iterations
@@ -511,4 +614,5 @@ def updateSimulation():
     else:
         print("Simlation stopped")
 
-updateSimulation()
+print("Starting simulation...")
+#updateSimulation()
