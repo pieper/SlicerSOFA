@@ -182,7 +182,7 @@ instrument_node.addObject("EigenSparseLU", template="CompressedRowSparseMatrixMa
 
 instrument_node.addObject("MechanicalObject", template="Rigid3d", position=instrument_pose)
 instrument_node.addObject("UniformMass", totalMass=instrument_mass)
-instrument_node.addObject("RestShapeSpringsForceField", external_rest_shape=instrument_motion_spring_target_node.getLinkPath(), stiffness=0, angularStiffness=1e10)
+instrument_node.addObject("RestShapeSpringsForceField", external_rest_shape=instrument_motion_spring_target_node.getLinkPath(), stiffness=1e8, angularStiffness=1e10)
 
 instrument_attachment = instrument_node.addChild("attachment")
 instrument_attachment.addObject("MechanicalObject", template="Vec3d", position=probeTarget)
