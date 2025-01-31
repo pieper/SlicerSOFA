@@ -257,7 +257,7 @@ def timeStep():
 
     # We can change the position by getting a writeable reference to the array
     # notice, that we change the position of the motion target, not the actual object
-    with root.scene.instrument.motion_target.MechanicalObject.position.writeable() as target_positions:
+    with root.scene.motion_target.MechanicalObject.position.writeable() as target_positions:
         # first index is the vertex, second index is the x, y, z coordinate
         #target_positions[0, 0] += 0.5
         target_positions[0, 0:3] = slicer.util.arrayFromMarkupsControlPoints(instrumentPoints)[0]
