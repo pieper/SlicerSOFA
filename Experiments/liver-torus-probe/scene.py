@@ -189,10 +189,7 @@ instrument_collision_node.addObject("QuadSetTopologyContainer", src=instrument_c
 # now we actually have to create a new MechanicalObject, because we load more points, and not just reference them through topological mappings like in the deformable objects
 instrument_collision_node.addObject("MechanicalObject", template="Vec3d")
 # there are quite a few points in this model. Simulation might slow down. You can just add a different obj file.
-#instrument_collision_node.addObject("PointCollisionModel")
-instrument_collision_node.addObject("PointCollisionModel")
 instrument_collision_node.addObject("LineCollisionModel")
-instrument_collision_node.addObject("TriangleCollisionModel")
 instrument_collision_node.addObject("RigidMapping")
 
 #############
