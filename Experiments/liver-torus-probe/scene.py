@@ -42,16 +42,13 @@ slicer.app.layoutManager().setLayout(slicer.vtkMRMLLayoutNode.SlicerLayoutOneUp3
 mesh_dir = Path("meshes")
 liver_mesh_file = mesh_dir / "liver2.msh"
 #instrument_surface_mesh_file = mesh_dir / "dental_instrument.obj"
-instrument_surface_mesh_file = mesh_dir / "probe.obj"
+instrument_surface_mesh_file="mesh/cylinder_35.56x3.75.obj" #If SOFA_ROOT is correctly set, the loder will try to look for files under ${SHARE_DIR} that is defined in ${SOFA_ROOT}/etc/sofa.ini
 
 # Simulation Hyperparameters
-dt = 0.05
-#collision_detection_method = "MinProximityIntersection"  # Which algorithm to use for collision detection
-#collision_detection_method = "LocalMinDistance"  # Which algorithm to use for collision detection
-collision_detection_method = "DiscreteIntersection"  # Which algorithm to use for collision detection
-#collision_detection_method = "NewProximityIntersection"  # Which algorithm to use for collision detection
-alarm_distance = 10.0  # This will tell the collision detection algorithm to start checking for actual collisions
-contact_distance = 0.8  # This is the distance at which the collision detection algorithm will consider two objects to be in contact
+dt = 0.01
+
+alarm_distance = 5  # This will tell the collision detection algorithm to start checking for actual collisions
+contact_distance = 3  # This is the distance at which the collision detection algorithm will consider two objects to be in contact
 
 liver_mass = 300.0  # g
 #liver_youngs_modulus = 15.0 * 1000.0  # 15 kPa -> 15 * 1000 in mm/s/g
@@ -63,7 +60,7 @@ torus_mass = 2000.0  # g
 torus_youngs_modulus = 30.0 * 1000.0  # 15 kPa -> 15 * 1000 in mm/s/g
 torus_poisson_ratio = 0.48
 
-instrument_mass = 1000.0  # g
+instrument_mass = 100.0  # g
 #instrument_pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]  # x, y, z, qx, qy, qz, qw
 instrument_pose = probeTarget + [0.0, 0.0, 0.0, 1.0]  # x, y, z, qx, qy, qz, qw
 
@@ -81,10 +78,10 @@ root.addObject("CollisionPipeline")  # This object will be used to manage the co
 root.addObject("ParallelBruteForceBroadPhase")  # The broad phase checks for overlaps in bounding boxes
 root.addObject("ParallelBVHNarrowPhase")  # And the narrow phase checks for collisions
 #root.addObject(collision_detection_method, alarmDistance=alarm_distance, contactDistance=contact_distance)  # Using this algorithm for collision detection
-root.addObject(collision_detection_method)  # Using this algorithm for collision detection
+root.addObject("NewProximityIntersection",useLineLine=True,alarmDistance=alarm_distance,contactDistance=contact_distance)  # Using this algorithm for collision detection
 
 root.addObject("CollisionResponse", response="FrictionContactConstraint")  # This object will be used to manage the collision response
-root.addObject("GenericConstraintSolver")  # And this object will be used to solve the constraints resulting from collisions etc.
+root.addObject("GenericConstraintSolver",tolerance=1e-5)  # And this object will be used to solve the constraints resulting from collisions etc.
 
 scene_node = root.addChild("scene")  # The scene node will contain all the objects in the scene
 
@@ -108,9 +105,10 @@ liver_collision_node = liver_node.addChild("collision")
 liver_collision_node.addObject("TriangleSetTopologyContainer")  # Another topology container, this time for the triangles for collision
 liver_collision_node.addObject("TriangleSetTopologyModifier")  # And the modifier for the triangles
 liver_collision_node.addObject("Tetra2TriangleTopologicalMapping")  # This will map the tetrahedra from the parent node to the triangles in this node
-liver_collision_node.addObject("PointCollisionModel")  # This will create the collision model based on the points stored in the TriangleSetTopologyContainer
+liver_collision_node.addObject("MechanicalObject")  # This components holds the positions, velocities, and forces of the vertices
 liver_collision_node.addObject("LineCollisionModel")  # This will create the collision model based on the points stored in the TriangleSetTopologyContainer
-liver_collision_node.addObject("TriangleCollisionModel")  # And for the triangles
+liver_collision_node.addObject("IdentityMapping")  # This will create the mapping linking the applied forces to the object
+
 
 #############
 ### Torus ###
@@ -131,30 +129,36 @@ elif shape == "box":
   bbox = (200, 200, 200, 250, 250, 250)
   points, hexahedra = slicersofa.meshes.cube_hexahedral_mesh(bbox, 5, 5, 5)
 
+
+
 hexahedra_node = scene_node.addChild("hexa")
-hexahedra_node.addObject("HexahedronSetTopologyContainer", position=points, hexahedra=hexahedra)
+hexahedra_node.addObject("HexahedronSetTopologyContainer", name="container", position=points, hexahedra=hexahedra)
 hexahedra_node.addObject("HexahedronSetTopologyModifier")
-hexahedra_node.addObject("EulerImplicitSolver")
-hexahedra_node.addObject("SparseLDLSolver", template="CompressedRowSparseMatrixMat3x3d")
 hexahedra_node.addObject("MechanicalObject")
-hexahedra_node.addObject("UniformMass", totalMass=torus_mass)
-hexahedra_node.addObject("LinearSolverConstraintCorrection")
+
 
 # Subdivide them into Tetrahedra for FEM
-tetrahedra_node = hexahedra_node.addChild("tetra")
-tetrahedra_node.addObject("TetrahedronSetTopologyContainer")
+tetrahedra_node = scene_node.addChild("tetra")
+tetrahedra_node.addObject("EulerImplicitSolver")
+tetrahedra_node.addObject("SparseLDLSolver", template="CompressedRowSparseMatrixMat3x3d")
+
+tetrahedra_node.addObject("TetrahedronSetTopologyContainer",name="container")
 tetrahedra_node.addObject("TetrahedronSetTopologyModifier")
-tetrahedra_node.addObject("Hexa2TetraTopologicalMapping")
+tetrahedra_node.addObject("Hexa2TetraTopologicalMapping",input="@../hexa/container", output="@container")
+
 tetrahedra_node.addObject("TetrahedralCorotationalFEMForceField", youngModulus=torus_youngs_modulus, poissonRatio=torus_poisson_ratio)
+tetrahedra_node.addObject("MechanicalObject")
+tetrahedra_node.addObject("UniformMass", totalMass=torus_mass)
+tetrahedra_node.addObject("LinearSolverConstraintCorrection")
 
 # Determine the surface triangles for collision
 triangle_node = tetrahedra_node.addChild("triangle")
 triangle_node.addObject("TriangleSetTopologyContainer")
 triangle_node.addObject("TriangleSetTopologyModifier")
 triangle_node.addObject("Tetra2TriangleTopologicalMapping")
-triangle_node.addObject("PointCollisionModel")
+triangle_node.addObject("MechanicalObject")
 triangle_node.addObject("LineCollisionModel")
-triangle_node.addObject("TriangleCollisionModel")
+triangle_node.addObject("IdentityMapping")  # This will create the mapping linking the applied forces to the object
 
 ##################
 ### Instrument ###
@@ -163,29 +167,29 @@ triangle_node.addObject("TriangleCollisionModel")
 # If we want to control the position of the object, we can either set velocities and forces in the MechanicalObject, or we use a motion target
 # and add some springs, to "fake" a force control. If we set the position directly, collision checking would no longer work, because the object
 # "teleports" through the scene.
+instrument_motion_target_node = scene_node.addChild("motion_target")
+instrument_motion_target_node.addObject("MechanicalObject", template="Rigid3d", position=instrument_pose)
+
+
+
 instrument_node = scene_node.addChild("instrument")
 instrument_node.addObject("EulerImplicitSolver")
-instrument_node.addObject("CGLinearSolver")
+instrument_node.addObject("EigenSparseLU", template="CompressedRowSparseMatrixMat3x3d")
 
-instrument_motion_target_node = instrument_node.addChild("motion_target")
-instrument_motion_target_node.addObject("MechanicalObject", template="Rigid3d", position=instrument_pose)
 
 instrument_node.addObject("MechanicalObject", template="Rigid3d", position=instrument_pose)
 instrument_node.addObject("UniformMass", totalMass=instrument_mass)
-instrument_node.addObject("RestShapeSpringsForceField", external_rest_shape=instrument_motion_target_node.getLinkPath(), stiffness=1e12, angularStiffness=1e12)
+instrument_node.addObject("RestShapeSpringsForceField", external_rest_shape=instrument_motion_target_node.getLinkPath(), stiffness=1e10, angularStiffness=1e10)
 instrument_node.addObject("UncoupledConstraintCorrection")  # <- different to the deformable objects, where the points are not uncoupled
 
 instrument_collision_node = instrument_node.addChild("collision")
 #instrument_collision_node.addObject("MeshOBJLoader", filename=str(instrument_surface_mesh_file), scale=30.0, translation=[0.0, 0.0, 200.0])
-instrument_collision_node.addObject("MeshOBJLoader", filename=str(instrument_surface_mesh_file))
-instrument_collision_node.addObject("TriangleSetTopologyContainer", src=instrument_collision_node.MeshOBJLoader.getLinkPath())
+instrument_collision_node.addObject("MeshOBJLoader", filename=str(instrument_surface_mesh_file),scale3d=[0.5, 3, 0.5],rotation=[90,0,0])
+instrument_collision_node.addObject("QuadSetTopologyContainer", src=instrument_collision_node.MeshOBJLoader.getLinkPath())
 # now we actually have to create a new MechanicalObject, because we load more points, and not just reference them through topological mappings like in the deformable objects
 instrument_collision_node.addObject("MechanicalObject", template="Vec3d")
 # there are quite a few points in this model. Simulation might slow down. You can just add a different obj file.
-#instrument_collision_node.addObject("PointCollisionModel")
-instrument_collision_node.addObject("PointCollisionModel")
 instrument_collision_node.addObject("LineCollisionModel")
-instrument_collision_node.addObject("TriangleCollisionModel")
 instrument_collision_node.addObject("RigidMapping")
 
 #############
@@ -253,7 +257,7 @@ def timeStep():
 
     # We can change the position by getting a writeable reference to the array
     # notice, that we change the position of the motion target, not the actual object
-    with root.scene.instrument.motion_target.MechanicalObject.position.writeable() as target_positions:
+    with root.scene.motion_target.MechanicalObject.position.writeable() as target_positions:
         # first index is the vertex, second index is the x, y, z coordinate
         #target_positions[0, 0] += 0.5
         target_positions[0, 0:3] = slicer.util.arrayFromMarkupsControlPoints(instrumentPoints)[0]
