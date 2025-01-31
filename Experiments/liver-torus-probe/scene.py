@@ -167,9 +167,12 @@ triangle_node.addObject("IdentityMapping")  # This will create the mapping linki
 # If we want to control the position of the object, we can either set velocities and forces in the MechanicalObject, or we use a motion target
 # and add some springs, to "fake" a force control. If we set the position directly, collision checking would no longer work, because the object
 # "teleports" through the scene.
-instrument_motion_target_node = scene_node.addChild("motion_target")
-instrument_motion_target_node.addObject("MechanicalObject", template="Rigid3d", position=instrument_pose)
 
+instrument_motion_spring_target_node = scene_node.addChild("motion_target_spring")
+instrument_motion_spring_target_node.addObject("MechanicalObject", template="Rigid3d", position=instrument_pose)
+
+instrument_motion_lagrange_target_node = scene_node.addChild("motion_target_lagrangian")
+instrument_motion_lagrange_target_node.addObject("MechanicalObject", template="Vec3d", position=probeTarget)
 
 
 instrument_node = scene_node.addChild("instrument")
@@ -179,16 +182,19 @@ instrument_node.addObject("EigenSparseLU", template="CompressedRowSparseMatrixMa
 
 instrument_node.addObject("MechanicalObject", template="Rigid3d", position=instrument_pose)
 instrument_node.addObject("UniformMass", totalMass=instrument_mass)
-instrument_node.addObject("RestShapeSpringsForceField", external_rest_shape=instrument_motion_target_node.getLinkPath(), stiffness=1e10, angularStiffness=1e10)
+instrument_node.addObject("RestShapeSpringsForceField", external_rest_shape=instrument_motion_spring_target_node.getLinkPath(), stiffness=0, angularStiffness=1e10)
+
+instrument_attachment = instrument_node.addChild("attachment")
+instrument_attachment.addObject("MechanicalObject", template="Vec3d", position=probeTarget)
+instrument_attachment.addObject("BilateralLagrangianConstraint",object1="@MechanicalObject", object2=instrument_motion_lagrange_target_node.MechanicalObject.getLinkPath(), first_point="0", second_point="0")
+instrument_attachment.addObject("RigidMapping",globalToLocalCoords=True)
+
 instrument_node.addObject("UncoupledConstraintCorrection")  # <- different to the deformable objects, where the points are not uncoupled
 
 instrument_collision_node = instrument_node.addChild("collision")
-#instrument_collision_node.addObject("MeshOBJLoader", filename=str(instrument_surface_mesh_file), scale=30.0, translation=[0.0, 0.0, 200.0])
 instrument_collision_node.addObject("MeshOBJLoader", filename=str(instrument_surface_mesh_file),scale3d=[0.5, 3, 0.5],rotation=[90,0,0])
 instrument_collision_node.addObject("QuadSetTopologyContainer", src=instrument_collision_node.MeshOBJLoader.getLinkPath())
-# now we actually have to create a new MechanicalObject, because we load more points, and not just reference them through topological mappings like in the deformable objects
 instrument_collision_node.addObject("MechanicalObject", template="Vec3d")
-# there are quite a few points in this model. Simulation might slow down. You can just add a different obj file.
 instrument_collision_node.addObject("LineCollisionModel")
 instrument_collision_node.addObject("RigidMapping")
 
@@ -257,10 +263,16 @@ def timeStep():
 
     # We can change the position by getting a writeable reference to the array
     # notice, that we change the position of the motion target, not the actual object
-    with root.scene.motion_target.MechanicalObject.position.writeable() as target_positions:
+
+    with root.scene.motion_target_spring.MechanicalObject.position.writeable() as target_positions:
         # first index is the vertex, second index is the x, y, z coordinate
         #target_positions[0, 0] += 0.5
-        target_positions[0, 0:3] = slicer.util.arrayFromMarkupsControlPoints(instrumentPoints)[0]
+        target_positions[0, 0:3] = slicer.util.arrayFromMarkupsControlPoints(instrumentPoints)[0] #This should be modified to add the quaternion
+
+    with root.scene.motion_target_lagrangian.MechanicalObject.position.writeable() as target_positions:
+        # first index is the vertex, second index is the x, y, z coordinate
+        #target_positions[0, 0] += 0.5
+        target_positions[0] = slicer.util.arrayFromMarkupsControlPoints(instrumentPoints)[0]
 
     if PYVISTA:
         # the valuess in the numpy array are update, but pyvista does copy, not reference the data
