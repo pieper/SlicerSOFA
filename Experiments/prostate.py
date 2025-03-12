@@ -88,6 +88,13 @@ if not labelNode:
     labelNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode")
     labelNode.SetName("label")
 
+needleNode = slicer.mrmlScene.GetFirstNodeByName("needle")
+if not needleNode:
+    needleNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsLineNode")
+    needleNode.SetName("needle")
+    needleNode.SetNthControlPointPosition(0, 19.840361673988156, -60.18790000000003, 1063.4529065701)
+    needleNode.SetNthControlPointPosition(1, 14.130841246975649, -60.18790000000003, 1120.548110840225)
+
 segNode.SetReferenceImageGeometryParameterFromVolumeNode(mrNode)
 forceToSingleLayer = True
 segNode.GetSegmentation().CollapseBinaryLabelmaps(forceToSingleLayer)
@@ -101,6 +108,7 @@ for boneSegmentID in materials['bones']:
     boneName = segNode.GetSegmentation().GetSegment(boneSegmentID).GetName()
     boneIndex = colorNode.GetColorIndexByName(boneName)
     boneLabelIndices.append(boneIndex)
+
 
 # create mesh points
 print("meshing...")
@@ -480,4 +488,38 @@ def updateSimulation():
         print("Simlation stopped")
 
 print("Starting simulation...")
-#updateSimulation()
+updateSimulation()
+
+
+finalDisplacements = numpy.array(slicer.util.arrayFromGridTransform(displacementGridNode))
+
+def onValueChanged(int):
+    global displacementGridNode, finalDisplacements
+    global slider
+    interpolatedDisplacements = slicer.util.arrayFromGridTransform(displacementGridNode)
+    animationFactor = slider.value / slider.maximum
+    interpolatedDisplacements[:] = animationFactor * finalDisplacements
+    slicer.util.arrayFromGridTransformModified(displacementGridNode)
+    displacementGridNode.Modified()
+
+slider = qt.QSlider()
+slider.orientation = 1
+slider.size = qt.QSize(500, 200)
+slider.connect("valueChanged(int)", onValueChanged)
+slider.show()
+
+go = True
+frame = 0
+direction = 1
+def animate():
+    global frame, slider, direction
+    slider.value = frame
+    frame += direction
+    if frame >= 99:
+        direction = -1
+    if frame <= 0:
+        direction = 1
+    if go:
+        qt.QTimer.singleShot(10, animate)
+
+#animate()
