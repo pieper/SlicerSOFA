@@ -30,7 +30,8 @@ dt = 0.0125
 #gravityVector = [-50000, 0, 0]
 #gravityVector = [50000, 0, 0]
 #gravityVector = [-9000, 0, 0]
-gravityVector = [0, 0, 90000]
+#gravityVector = [0, 0, 90000]
+gravityVector = [0, 0, 0]
 
 #cavityCollisionMethod = "NewProximityIntersection"
 cavityCollisionMethod = "LocalMinDistance"
@@ -38,6 +39,9 @@ cavityCollisionMethod = "LocalMinDistance"
 cavityAlarmDistance = 10.0
 cavityContactDistance = 5
 cavityFriction=0.001
+
+needleInfluenceRadius = 20
+needleForce = 25
 
 # set up input data
 print("loading...")
@@ -66,8 +70,12 @@ roiNode = slicer.mrmlScene.GetFirstNodeByName("pelvis roi")
 if not roiNode:
     roiNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsROINode")
     roiNode.SetName("pelvis roi")
-    roiNode.SetCenter(12, -28, 1183)
-    roiNode.SetSize(318, 268, 215)
+    if False:
+        roiNode.SetCenter(12, -28, 1183)
+        roiNode.SetSize(318, 268, 215)
+    else:
+        roiNode.SetCenter(19, -27, 1158)
+        roiNode.SetSize(153, 160, 166)
     roiNode.CreateDefaultDisplayNodes()
     roiNode.GetDisplayNode().SetVisibility(False)
 
@@ -92,8 +100,9 @@ needleNode = slicer.mrmlScene.GetFirstNodeByName("needle")
 if not needleNode:
     needleNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsLineNode")
     needleNode.SetName("needle")
-    needleNode.SetNthControlPointPosition(0, 19.840361673988156, -60.18790000000003, 1063.4529065701)
-    needleNode.SetNthControlPointPosition(1, 14.130841246975649, -60.18790000000003, 1120.548110840225)
+    needleNode.AddControlPoint(19, -60, 1063)
+    needleNode.AddControlPoint(14, -60, 1120)
+    slicer.modules.markups.logic().JumpSlicesToNthPointInMarkup(needleNode.GetID(), 1)
 
 segNode.SetReferenceImageGeometryParameterFromVolumeNode(mrNode)
 forceToSingleLayer = True
@@ -436,6 +445,19 @@ vesselAttachments = pelvisMeshSofaNode.addChild('VesselAttachments')
 fixedIndices = numpy.unique(numpy.concatenate([boneNodeIndices, bottomNodeIndices]))
 vesselAttachments.addObject('FixedConstraint', indices=fixedIndices)
 
+needleForcesArray = numpy.zeros_like(extractedPointsArray)
+nodeIndices = numpy.linspace(0, needleForcesArray.shape[0]-1, needleForcesArray.shape[0], dtype='int32')
+needleForces = pelvisMeshSofaNode.addObject('ConstantForceField', indices=nodeIndices, forces=needleForcesArray)
+
+def distanceToLineSegment(point, start, end):
+    tangent = (end - start) / numpy.linalg.norm(end - start)
+    # signed parallel distance components
+    s = numpy.dot(start - point, tangent)
+    t = numpy.dot(point - end, tangent)
+    clampedParallelDistance = numpy.maximum.reduce([s, t, 0])
+    perpendicularDistanceComponent = numpy.linalg.norm(numpy.cross(point - start, tangent))
+    return numpy.hypot(clampedParallelDistance, perpendicularDistanceComponent)
+
 # Runnning the simulation
 
 Sofa.Simulation.init(rootSofaNode)
@@ -452,18 +474,18 @@ def updateSimulation():
 
     Sofa.Simulation.animate(rootSofaNode, rootSofaNode.dt.value)
 
-    # update model from mechanical state
+    # update mseh from mechanical state
     meshPointsArray = mechanicalState.position.array()
     modelPointsArray = slicer.util.arrayFromModelPoints(meshNode)
     modelPointsArray[:] = meshPointsArray
     slicer.util.arrayFromModelPointsModified(meshNode)
 
-    # update stress from forceField
+    # update mesh stress stress from forceField
     stressArray = slicer.util.arrayFromModelCellData(meshNode, "VonMisesStress")
     stressArray[:] = forceField.vonMisesPerElement.array()
     slicer.util.arrayFromModelCellDataModified(meshNode, "VonMisesStress")
 
-    # update model points and grid transform from displacements
+    # update grid transform from displacements
     displacementArray = slicer.util.arrayFromModelPointData(meshNode, "Displacement")
     displacementArray[:] = (mechanicalState.position - mechanicalState.rest_position)
     slicer.util.arrayFromModelPointsModified(meshNode)
@@ -476,6 +498,20 @@ def updateSimulation():
     gridArray = slicer.util.arrayFromGridTransform(displacementGridNode)
     gridArray[:] = -1. * probeArray
     slicer.util.arrayFromGridTransformModified(displacementGridNode)
+
+    # create needle forces
+    with needleForces.forces.writeableArray() as forces:
+        base = numpy.array(needleNode.GetNthControlPointPosition(0))
+        tip = numpy.array(needleNode.GetNthControlPointPosition(1))
+        newForces = numpy.zeros_like(forces)
+        for index in nodeIndices:
+            originalRAS = extractedPointsArray[index]
+            displacedRAS = modelPointsArray[index]
+            needleLength = numpy.linalg.norm(tip-base)
+            needleTangent = (tip-base) / needleLength
+            nodeDistance = distanceToLineSegment(originalRAS, base, tip)
+            if nodeDistance < needleInfluenceRadius:
+                forces[index] = needleForce
 
     # iteration management
     iteration += 1
@@ -491,7 +527,6 @@ print("Starting simulation...")
 updateSimulation()
 
 
-finalDisplacements = numpy.array(slicer.util.arrayFromGridTransform(displacementGridNode))
 
 def onValueChanged(int):
     global displacementGridNode, finalDisplacements
@@ -522,4 +557,7 @@ def animate():
     if go:
         qt.QTimer.singleShot(10, animate)
 
-#animate()
+"""
+finalDisplacements = numpy.array(slicer.util.arrayFromGridTransform(displacementGridNode))
+animate()
+"""
