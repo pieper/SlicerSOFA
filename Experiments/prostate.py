@@ -41,7 +41,7 @@ cavityContactDistance = 5
 cavityFriction=0.001
 
 needleInfluenceRadius = 20
-needleForce = 25
+needleForce = 125
 
 # set up input data
 print("loading...")
@@ -101,7 +101,7 @@ if not needleNode:
     needleNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsLineNode")
     needleNode.SetName("needle")
     needleNode.AddControlPoint(19, -60, 1063)
-    needleNode.AddControlPoint(14, -60, 1120)
+    needleNode.AddControlPoint(6, -49, 1120)
     slicer.modules.markups.logic().JumpSlicesToNthPointInMarkup(needleNode.GetID(), 1)
 
 segNode.SetReferenceImageGeometryParameterFromVolumeNode(mrNode)
@@ -469,8 +469,9 @@ print("Ready to start...")
 iteration = 0
 iterations = 30
 simulating = True
+finalDisplacements = numpy.array(slicer.util.arrayFromGridTransform(displacementGridNode))
 def updateSimulation():
-    global iteration, iterations, simulating
+    global iteration, iterations, simulating, finalDisplacements
 
     Sofa.Simulation.animate(rootSofaNode, rootSofaNode.dt.value)
 
@@ -503,15 +504,15 @@ def updateSimulation():
     with needleForces.forces.writeableArray() as forces:
         base = numpy.array(needleNode.GetNthControlPointPosition(0))
         tip = numpy.array(needleNode.GetNthControlPointPosition(1))
+        needleLength = numpy.linalg.norm(tip-base)
+        needleTangent = (tip-base) / needleLength
         newForces = numpy.zeros_like(forces)
         for index in nodeIndices:
             originalRAS = extractedPointsArray[index]
             displacedRAS = modelPointsArray[index]
-            needleLength = numpy.linalg.norm(tip-base)
-            needleTangent = (tip-base) / needleLength
             nodeDistance = distanceToLineSegment(originalRAS, base, tip)
             if nodeDistance < needleInfluenceRadius:
-                forces[index] = needleForce
+                forces[index] = needleTangent * needleForce
 
     # iteration management
     iteration += 1
@@ -522,11 +523,10 @@ def updateSimulation():
         qt.QTimer.singleShot(10, updateSimulation)
     else:
         print("Simlation stopped")
+        finalDisplacements = numpy.array(slicer.util.arrayFromGridTransform(displacementGridNode))
 
 print("Starting simulation...")
 updateSimulation()
-
-
 
 def onValueChanged(int):
     global displacementGridNode, finalDisplacements
@@ -537,13 +537,20 @@ def onValueChanged(int):
     slicer.util.arrayFromGridTransformModified(displacementGridNode)
     displacementGridNode.Modified()
 
+controller = qt.QWidget()
+controller.setLayout(qt.QVBoxLayout())
 slider = qt.QSlider()
-slider.orientation = 1
+slider.orientation = qt.Qt.Horizontal
 slider.size = qt.QSize(500, 200)
 slider.connect("valueChanged(int)", onValueChanged)
-slider.show()
+controller.layout().addWidget(slider)
+onButton = qt.QPushButton("Start animation")
+controller.layout().addWidget(onButton)
+offButton = qt.QPushButton("Stop animation")
+offButton.enabled = False
+controller.layout().addWidget(offButton)
+controller.show()
 
-go = True
 frame = 0
 direction = 1
 def animate():
@@ -554,10 +561,20 @@ def animate():
         direction = -1
     if frame <= 0:
         direction = 1
-    if go:
-        qt.QTimer.singleShot(10, animate)
 
-"""
-finalDisplacements = numpy.array(slicer.util.arrayFromGridTransform(displacementGridNode))
-animate()
-"""
+timer = qt.QTimer()
+timer.interval = 10
+timer.timeout.connect(animate)
+
+def start():
+    onButton.enabled = False
+    offButton.enabled = True
+    timer.start(10)
+
+def stop():
+    onButton.enabled = True
+    offButton.enabled = False
+    timer.stop()
+
+onButton.clicked.connect(start)
+offButton.clicked.connect(stop)
