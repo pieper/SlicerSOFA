@@ -27,7 +27,7 @@ for k in range(1, displacementDimension-1):
             toPointNorm = max(0.001, toPointNorm)
             pointEffect = displacementEffect / (10 + toPointNorm)
             toPointUnit = toPoint / toPointNorm
-            displacementArray[k,j,i] = toPointUnit * pointEffect
+            displacementArray[k,j,i] = -1 * toPointUnit * pointEffect
 print(displacementArray.max())
 
 gridNodeName = "Mechanical Displacement"
@@ -36,14 +36,17 @@ try:
 except slicer.util.MRMLNodeNotFoundException:
     gridNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLGridTransformNode", gridNodeName)
     gridNode.CreateDefaultDisplayNodes()
-displacementGrid = gridNode.GetTransformFromParent().GetDisplacementGrid()
+gridTransform = slicer.vtkOrientedGridTransform()
+displacementGrid = vtk.vtkImageData()
 arrayShape = displacementArray.shape
 displacementGrid.SetDimensions(arrayShape[2], arrayShape[1], arrayShape[0])
 scalarType = vtk.util.numpy_support.get_vtk_array_type(displacementArray.dtype)
 displacementGrid.AllocateScalars(scalarType, 3)
-gridArray = slicer.util.arrayFromGridTransform(gridNode)
-gridArray[:] = displacementArray
-slicer.util.arrayFromGridTransformModified(gridNode)
+gridTransform.SetDisplacementGridData(displacementGrid)
+gridNode.SetAndObserveTransformToParent(gridTransform)
+
+displacementGridArray = vtk.util.numpy_support.vtk_to_numpy(displacementGrid.GetPointData().GetScalars()).reshape(displacementArray.shape)
+displacementGridArray[:] = displacementArray
 gridNode.SetGlobalWarningDisplay(0)
 
 referenceToTracker = slicer.util.getNode("ReferenceToTracker")
@@ -58,9 +61,9 @@ def updateGridLocation(probeToReference, event):
     probeToWorld = vtk.vtkMatrix4x4()
     probeToReference.GetMatrixTransformFromWorld(probeToWorld)
     probeToWorld.Invert()
-    gridNode.GetTransformFromParent().SetGridDirectionMatrix(probeToWorld)
+    gridNode.GetTransformToParent().SetGridDirectionMatrix(probeToWorld)
     probeOrigin = [probeToWorld.GetElement(0,3), probeToWorld.GetElement(1,3), probeToWorld.GetElement(2,3)]
-    gridNode.GetTransformFromParent().GetDisplacementGrid().SetOrigin(probeOrigin)
+    gridNode.GetTransformToParent().GetDisplacementGrid().SetOrigin(probeOrigin)
 
 
 probeToReference = slicer.util.getNode("ProbeToReference")
