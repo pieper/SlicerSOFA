@@ -1,0 +1,82 @@
+import math
+import numpy
+import vtk.util.numpy_support
+
+
+scenePath = "/Users/pieper/slicer/latest/SlicerSOFA/Experiments/SimulatedUltrasound_Scene_Updated.mrb"
+slicer.mrmlScene.Clear()
+try:
+    slicer.util.loadScene(scenePath)
+except:
+    pass
+
+usNode = slicer.util.getNode("L14-5_38_ProbeModel")
+usBounds = numpy.ndarray(6)
+usNode.GetRASBounds(usBounds)
+print(usBounds)
+usMins = usBounds[::2]
+usMaxes = usBounds[1::2]
+usCenter = usMaxes - usMins
+usInferiorCenter = numpy.array(usCenter)
+usInferiorCenter[2] = usMins[2]
+print(usCenter)
+print(usInferiorCenter)
+
+displacementEffect = 100
+displacementDimension = 20
+displacementSpacing = 1
+displacementBound = displacementSpacing * displacementDimension
+displacementShape = (displacementDimension, displacementDimension, displacementDimension, 3)
+topCenter = [0, 0.5 * displacementBound, 0.5 * displacementBound]
+origin = numpy.array(topCenter)
+displacementArray = numpy.zeros(displacementShape)
+for k in range(displacementDimension):
+    for j in range(displacementDimension):
+        for i in range(displacementDimension):
+            x = i * displacementSpacing -0.5 * displacementBound
+            y = j * displacementSpacing -0.5 * displacementBound
+            z = k * displacementSpacing -0.5 * displacementBound
+            point = numpy.array([x,y,z])
+            toPoint = point - origin
+            toPointNorm = numpy.linalg.norm(toPoint)
+            toPointNormed = toPoint / toPointNorm
+            pointEffect = displacementEffect / (1 + toPointNorm)
+            displacementArray[k,j,i] = toPointNormed * pointEffect
+print(displacementArray.max())
+
+gridLocationName = "Grid Location"
+gridNodeName = "Mechanical Displacement"
+try:
+    gridNode = slicer.util.getNode(gridNodeName)
+except slicer.util.MRMLNodeNotFoundException:
+    gridNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLGridTransformNode", gridNodeName)
+    gridNode.CreateDefaultDisplayNodes()
+    gridLocationNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLinearTransformNode", "gridLocationName")
+displacementGrid = gridNode.GetTransformFromParent().GetDisplacementGrid()
+arrayShape = displacementArray.shape
+displacementGrid.SetDimensions(arrayShape[2], arrayShape[1], arrayShape[0])
+scalarType = vtk.util.numpy_support.get_vtk_array_type(displacementArray.dtype)
+displacementGrid.AllocateScalars(scalarType, 3)
+gridArray = slicer.util.arrayFromGridTransform(gridNode)
+gridArray[:] = displacementArray
+slicer.util.arrayFromGridTransformModified(gridNode)
+gridNode.SetGlobalWarningDisplay(0)
+
+
+referenceToTracker = slicer.util.getNode("ReferenceToTracker")
+squishyPartNames = ["bras", "radial_artery", "ulnar_artery", "veins"]
+for partName in squishyPartNames:
+    partNode = slicer.util.getNode(partName)
+    partNode.HardenTransform()
+    partNode.SetAndObserveTransformNodeID(gridNode.GetID())
+
+gridNode.SetAndObserveTransformNodeID(gridLocationNode.GetID())
+
+def updateGridLocation(probeToTracker, event):
+    probeToWorld = vtk.vtkMatrix4x4()
+    probeToTracker.GetMatrixTransformFromWorld(probeToWorld)
+    gridLocationNode.SetMatrixTransformFromParent(probeToWorld)
+
+probeToTracker = slicer.util.getNode("ProbeToReference")
+probeToTracker.AddObserver(slicer.vtkMRMLTransformNode.TransformModifiedEvent, updateGridLocation)
+
